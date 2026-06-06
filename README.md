@@ -1,5 +1,7 @@
 # sfizioso
 
+[![build](https://github.com/rullopat/sfizioso/actions/workflows/build.yml/badge.svg)](https://github.com/rullopat/sfizioso/actions/workflows/build.yml)
+
 An independent, **MPE-capable fork** of the [sfizz] SFZ parser + synthesis C++ library.
 
 > sfizioso is **not** endorsed by, nor affiliated with, the sfizz authors or the
