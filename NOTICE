@@ -1,0 +1,20 @@
+sfizioso
+========
+
+sfizioso is an independent fork of the sfizz SFZ engine
+(https://github.com/sfztools/sfizz). It is maintained separately and is not
+endorsed by, nor affiliated with, the sfizz authors or the SFZTools project.
+
+The upstream sfizz code is licensed under the BSD 2-Clause License. That
+license and the original copyright notices are retained in LICENSE.md and
+throughout the source tree. The changes made in this fork are released under
+the same BSD 2-Clause License.
+
+Notable additions over upstream sfizz:
+
+  - MPE support: per-channel pitch / CC / aftertouch routing, configurable
+    master and per-note pitch-bend ranges, MPE auto-configuration, and
+    MPE-aware voice handling, exposed through parallel C and C++ API surfaces.
+
+Naming: "SFZ" is the instrument file format. "sfizz" is the name of the
+upstream project. "sfizioso" is the name of this fork.

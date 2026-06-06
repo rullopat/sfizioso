@@ -1,6 +1,13 @@
-# Author and contributors
+# Authors and contributors
 
-Contributors to `sfizz`, in chronologic order:
+## sfizioso
+
+- Patrizio Rullo — fork maintainer; MPE support and brand surface.
+
+## sfizz (upstream)
+
+sfizioso is a fork of sfizz. The following contributed to the upstream sfizz
+codebase this fork is built on (chronological order):
 
 - Paul Ferrand (2019-2020) (maintainer)
 - Andrea Zanellato (2019-2020) (devops, documentation and distribution)
