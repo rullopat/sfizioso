@@ -166,8 +166,35 @@ sfz::FilePool::~FilePool()
         job.wait();
 }
 
+sfz::SampleData sfz::FilePool::readSampleData(const FileId& fileId) const noexcept
+{
+    if (sampleReader == nullptr)
+        return {};
+
+    const std::string& filename = fileId.filename();
+    if (auto data = sampleReader->read(filename))
+        return data;
+
+    const fs::path resolvedPath { rootDirectory / filename };
+    const std::string resolved = resolvedPath.string();
+    if (resolved != filename)
+        return sampleReader->read(resolved);
+
+    return {};
+}
+
 bool sfz::FilePool::checkSample(std::string& filename) const noexcept
 {
+    if (sampleReader != nullptr) {
+        if (sampleReader->read(filename))
+            return true;
+
+        const fs::path resolvedPath { rootDirectory / filename };
+        const std::string resolved = resolvedPath.string();
+        if (resolved != filename && sampleReader->read(resolved))
+            return true;
+    }
+
     fs::path path { rootDirectory / filename };
     std::error_code ec;
     if (fs::exists(path, ec))
@@ -298,6 +325,11 @@ absl::optional<sfz::FileInformation> sfz::FilePool::getFileInformation(const Fil
     if (existingInformation)
         return existingInformation;
 
+    if (auto data = readSampleData(fileId)) {
+        AudioReaderPtr reader = createAudioReaderFromMemory(data.data, data.size, fileId.isReverse());
+        return getReaderInformation(reader.get());
+    }
+
     const fs::path file { rootDirectory / fileId.filename() };
 
     if (!fs::exists(file))
@@ -320,8 +352,13 @@ bool sfz::FilePool::preloadFile(const FileId& fileId, uint32_t maxOffset) noexce
         return false;
 
     fileInformation->maxOffset = maxOffset;
-    const fs::path file { rootDirectory / fileId.filename() };
-    AudioReaderPtr reader = createAudioReader(file, fileId.isReverse());
+    AudioReaderPtr reader;
+    if (auto data = readSampleData(fileId))
+        reader = createAudioReaderFromMemory(data.data, data.size, fileId.isReverse());
+    else {
+        const fs::path file { rootDirectory / fileId.filename() };
+        reader = createAudioReader(file, fileId.isReverse());
+    }
 
     const auto frames = static_cast<uint32_t>(reader->frames());
     const auto framesToLoad = [&]() {
@@ -395,8 +432,13 @@ sfz::FileDataHolder sfz::FilePool::loadFile(const FileId& fileId) noexcept
         return { &existingFile->second };
     }
 
-    const fs::path file { rootDirectory / fileId.filename() };
-    AudioReaderPtr reader = createAudioReader(file, fileId.isReverse());
+    AudioReaderPtr reader;
+    if (auto data = readSampleData(fileId))
+        reader = createAudioReaderFromMemory(data.data, data.size, fileId.isReverse());
+    else {
+        const fs::path file { rootDirectory / fileId.filename() };
+        reader = createAudioReader(file, fileId.isReverse());
+    }
 
     const auto frames = static_cast<uint32_t>(reader->frames());
     auto insertedPair = loadedFiles.insert_or_assign(fileId, {
@@ -468,8 +510,13 @@ void sfz::FilePool::setPreloadSize(uint32_t preloadSize) noexcept
         auto& fileId = preloadedFile.first;
         auto& fileData = preloadedFile.second;
         const auto maxOffset = fileData.information.maxOffset;
-        fs::path file { rootDirectory / fileId.filename() };
-        AudioReaderPtr reader = createAudioReader(file, fileId.isReverse());
+        AudioReaderPtr reader;
+        if (auto data = readSampleData(fileId))
+            reader = createAudioReaderFromMemory(data.data, data.size, fileId.isReverse());
+        else {
+            fs::path file { rootDirectory / fileId.filename() };
+            reader = createAudioReader(file, fileId.isReverse());
+        }
         const auto frames = reader->frames();
         const auto framesToLoad = min(frames, maxOffset + preloadSize);
         fileData.preloadedData = readFromFile(*reader, static_cast<uint32_t>(framesToLoad));
@@ -487,9 +534,14 @@ void sfz::FilePool::loadingJob(const QueuedFileData& data) noexcept
         return;
     }
 
-    const fs::path file { rootDirectory / id->filename() };
     std::error_code readError;
-    AudioReaderPtr reader = createAudioReader(file, id->isReverse(), &readError);
+    AudioReaderPtr reader;
+    if (auto sampleData = readSampleData(*id))
+        reader = createAudioReaderFromMemory(sampleData.data, sampleData.size, id->isReverse(), &readError);
+    else {
+        const fs::path file { rootDirectory / id->filename() };
+        reader = createAudioReader(file, id->isReverse(), &readError);
+    }
 
     if (readError) {
         DBG("[sfizz] reading the file errored for " << *id << " with code " << readError << ": " << readError.message());

@@ -5,8 +5,28 @@
 // If not, contact the sfizz maintainers at https://github.com/sfztools/sfizz
 
 #pragma once
+#include "sfizz.h"
+#include "sfizz.hpp"
 #include "Synth.h"
 #include <atomic>
+
+struct sfizz_c_sample_reader final : sfz::SampleReader {
+    sfizz_sample_reader_t* callback = nullptr;
+    void* userData = nullptr;
+
+    sfz::SampleData read(const std::string& path) override
+    {
+        if (callback == nullptr)
+            return {};
+
+        const void* data = nullptr;
+        size_t size = 0;
+        if (!callback(userData, path.c_str(), &data, &size))
+            return {};
+
+        return { data, size };
+    }
+};
 
 struct sfizz_synth_t {
 public:
@@ -33,5 +53,6 @@ public:
     }
 
     sfz::Synth synth;
+    sfizz_c_sample_reader cSampleReader;
     std::atomic<size_t> rc;
 };

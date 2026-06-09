@@ -62,6 +62,14 @@ extern "C" {
 typedef struct sfizz_synth_t sfizz_synth_t;
 
 /**
+ * @brief Host-provided sample byte source.
+ *
+ * Return true and fill data/size when the sample path is available in memory.
+ * Return false to let sfizz fall back to normal disk reads.
+ */
+typedef bool (sfizz_sample_reader_t)(void* user_data, const char* path, const void** data, size_t* size);
+
+/**
  * @brief Oversampling factor
  * @since 0.2.0
  */
@@ -146,6 +154,24 @@ SFIZZ_EXPORTED_API bool sfizz_load_file(sfizz_synth_t* synth, const char* path);
  * - @b OFF: the function cannot be invoked while a thread is calling @b RT functions
  */
 SFIZZ_EXPORTED_API bool sfizz_load_string(sfizz_synth_t* synth, const char* path, const char* text);
+
+/**
+ * @brief Set an optional host-provided sample reader.
+ *
+ * Passing NULL restores disk-only sample reads. Returned bytes must stay valid
+ * for the duration of the load/read call.
+ *
+ * @param synth      The synth.
+ * @param reader     Callback function, or NULL.
+ * @param user_data  Opaque pointer passed to reader.
+ *
+ * @par Thread-safety constraints
+ * - @b CT: the function must be invoked from the Control thread
+ * - @b OFF: the function cannot be invoked while a thread is calling @b RT functions
+ */
+SFIZZ_EXPORTED_API void sfizz_set_sample_reader(sfizz_synth_t* synth,
+                                                sfizz_sample_reader_t* reader,
+                                                void* user_data);
 
 /**
  * @brief Sets the tuning from a Scala file loaded from the file system.

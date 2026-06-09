@@ -25,6 +25,7 @@ class Parser;
 class RegionSet;
 class PolyphonyGroup;
 class EffectBus;
+class SampleReader;
 struct Region;
 struct Layer;
 class Voice;
@@ -119,6 +120,11 @@ public:
      *         @true otherwise.
      */
     bool loadSfzString(const fs::path& path, absl::string_view text);
+
+    /**
+     * @brief Set an optional host-provided sample reader.
+     */
+    void setSampleReader(SampleReader* reader) noexcept;
     /**
      * @brief Sets the tuning from a Scala file loaded from the file system.
      *

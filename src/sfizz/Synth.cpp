@@ -722,6 +722,11 @@ bool Synth::loadSfzString(const fs::path& path, absl::string_view text)
     return true;
 }
 
+void Synth::setSampleReader(SampleReader* reader) noexcept
+{
+    impl_->resources_.getFilePool().setSampleReader(reader);
+}
+
 void Synth::Impl::setCurrentSwitch(uint8_t noteValue)
 {
     currentSwitch_ = noteValue + 12 * octaveOffset_ + noteOffset_;

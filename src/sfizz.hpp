@@ -39,6 +39,20 @@ struct sfizz_synth_t;
 namespace sfz
 {
 class Client;
+
+struct SampleData {
+    const void* data = nullptr;
+    size_t size = 0;
+
+    explicit operator bool() const noexcept { return data != nullptr && size > 0; }
+};
+
+class SampleReader {
+public:
+    virtual ~SampleReader() = default;
+    virtual SampleData read(const std::string& path) = 0;
+};
+
 /**
  * @brief Synthesizer for SFZ instruments
 *
@@ -140,6 +154,21 @@ public:
      * - @b OFF: the function cannot be invoked while a thread is calling @b RT functions
      */
     bool loadSfzString(const std::string& path, const std::string& text);
+
+    /**
+     * @brief Set an optional host-provided sample reader.
+     *
+     * When set, sample paths are first resolved through the reader. Returning
+     * empty SampleData falls back to the normal disk reader. The pointed bytes
+     * must stay valid for the duration of the load/read call.
+     *
+     * @param reader The reader to use, or nullptr to restore disk-only reads.
+     *
+     * @par Thread-safety constraints
+     * - @b CT: the function must be invoked from the Control thread
+     * - @b OFF: the function cannot be invoked while a thread is calling @b RT functions
+     */
+    void setSampleReader(SampleReader* reader);
 
     /**
      * @brief Sets the tuning from a Scala file loaded from the file system.

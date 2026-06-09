@@ -55,6 +55,11 @@ bool sfz::Sfizz::loadSfzString(const std::string& path, const std::string& text)
     return synth->synth.loadSfzString(path, text);
 }
 
+void sfz::Sfizz::setSampleReader(SampleReader* reader)
+{
+    synth->synth.setSampleReader(reader);
+}
+
 bool sfz::Sfizz::loadScalaFile(const std::string& path)
 {
     return synth->synth.loadScalaFile(path);

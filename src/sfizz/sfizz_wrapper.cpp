@@ -31,6 +31,15 @@ bool sfizz_load_string(sfizz_synth_t* synth, const char* path, const char* text)
     return synth->synth.loadSfzString(path, text);
 }
 
+void sfizz_set_sample_reader(sfizz_synth_t* synth,
+                             sfizz_sample_reader_t* reader,
+                             void* user_data)
+{
+    synth->cSampleReader.callback = reader;
+    synth->cSampleReader.userData = user_data;
+    synth->synth.setSampleReader(reader != nullptr ? &synth->cSampleReader : nullptr);
+}
+
 bool sfizz_load_scala_file(sfizz_synth_t* synth, const char* path)
 {
     return synth->synth.loadScalaFile(path);

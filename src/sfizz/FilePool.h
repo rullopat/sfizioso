@@ -33,6 +33,7 @@
 #include "FileMetadata.h"
 #include "SIMDHelpers.h"
 #include "SpinMutex.h"
+#include "sfizz.hpp"
 #include "utility/Timing.h"
 #include "utility/LeakDetector.h"
 #include "utility/MemoryHelpers.h"
@@ -205,6 +206,14 @@ public:
      * @param directory
      */
     void setRootDirectory(const fs::path& directory) noexcept { rootDirectory = directory; }
+
+    /**
+     * @brief Set an optional host-provided sample reader.
+     *
+     * The reader is not owned by the FilePool and must outlive any load that
+     * uses it. nullptr restores normal disk-only reads.
+     */
+    void setSampleReader(SampleReader* reader) noexcept { sampleReader = reader; }
     /**
      * @brief Get the number of preloaded sample files
      *
@@ -341,7 +350,10 @@ public:
 private:
 
     absl::optional<sfz::FileInformation> checkExistingFileInformation(const FileId& fileId) noexcept;
+    SampleData readSampleData(const FileId& fileId) const noexcept;
+
     fs::path rootDirectory;
+    SampleReader* sampleReader { nullptr };
 
     bool loadInRam { config::loadInRam };
     uint32_t preloadSize { config::preloadSize };
