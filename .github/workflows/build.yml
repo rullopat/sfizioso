@@ -26,3 +26,23 @@ jobs:
 
       - name: Build engine (static library)
         run: cmake --build build --target sfizz_static --config Release
+
+  linux:
+    name: build (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DSFIZZ_JACK=OFF -DSFIZZ_RENDER=OFF -DSFIZZ_BENCHMARKS=OFF
+          -DSFIZZ_TESTS=OFF -DSFIZZ_DEMOS=OFF -DSFIZZ_DEVTOOLS=OFF -DSFIZZ_SHARED=OFF
+
+      - name: Build engine (static library)
+        run: cmake --build build --target sfizz_static --config Release

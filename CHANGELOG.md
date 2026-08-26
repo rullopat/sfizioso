@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-26
+
+Forked from sfizz (1.2.3 development series).
+
+### Added
+
+- Host-provided sample reader callbacks in the C and C++ APIs, allowing samples
+  to be loaded from memory with transparent fallback to normal disk reads.
+- Linux CI coverage for the static engine library.
+
+### Changed
+
+- Raise the default C++ standard from C++14 to C++17 so GCC accepts the engine's
+  hexadecimal floating-point literals and Linux builds work out of the box.
+
+## [1.0.0] - 2026-06-06
+
 Forked from sfizz (1.2.3 development series).
 
 ### Added

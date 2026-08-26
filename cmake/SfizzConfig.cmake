@@ -4,9 +4,9 @@ include(CheckCXXCompilerFlag)
 include(CheckCXXSourceCompiles)
 include(GNUWarnings)
 
-# C++14 is the minimum standard version required by Abseil LTS 20230125.1 and later, see
-# https://github.com/abseil/abseil-cpp/releases/tag/20230125.1
-set(CMAKE_CXX_STANDARD 14 CACHE STRING "C++ standard to be used")
+# C++17 is required by the engine sources (including hexadecimal floating-point
+# literals) and keeps GCC/Linux builds aligned with MSVC builds.
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to be used")
 set(CMAKE_C_STANDARD 99 CACHE STRING "C standard to be used")
 
 # Export the compile_commands.json file
