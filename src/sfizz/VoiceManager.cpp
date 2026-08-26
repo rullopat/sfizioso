@@ -65,16 +65,19 @@ void VoiceManager::reset()
     setStealingAlgorithm(StealingAlgorithm::Oldest);
 }
 
-bool VoiceManager::playingAttackVoice(const Region* releaseRegion) noexcept
+bool VoiceManager::playingAttackVoice(const Region* releaseRegion,
+    int sourceChannel) noexcept
 {
-    const auto compatibleVoice = [releaseRegion](const Voice& v) -> bool {
+    const auto compatibleVoice = [releaseRegion, sourceChannel](const Voice& v) -> bool {
         const TriggerEvent& event = v.getTriggerEvent();
+        const bool sourceMatches = !releaseRegion->isChannelRestricted()
+            || sourceChannel < 0 || event.sourceChannel == sourceChannel;
         return (
             !v.isFree()
             && event.type == TriggerEventType::NoteOn
+            && sourceMatches
             && releaseRegion->keyRange.containsWithEnd(event.number)
-            && releaseRegion->velocityRange.containsWithEnd(event.value)
-        );
+            && releaseRegion->velocityRange.containsWithEnd(event.value));
     };
 
     if (absl::c_find_if(list_, compatibleVoice) == list_.end())

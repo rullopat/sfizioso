@@ -126,6 +126,8 @@ void sfz::Synth::dispatchMessage(Client& client, int delay, const char* path, co
         MATCH("/region&/bend_range", "ff") { m.set(&Region::bendRange); } break;
         MATCH("/region&/program_range", "") { m.reply(&Region::programRange); } break;
         MATCH("/region&/program_range", "ii") { m.set(&Region::programRange); } break;
+        MATCH("/region&/channel_range", "") { m.reply(&Region::channelRange); }
+        break;
         MATCH("/region&/cc_range&", "") { m.reply(&Region::ccConditions); } break;
         MATCH("/region&/cc_range&", "ff") { m.set(&Region::ccConditions); } break;
         MATCH("/region&/sw_last", "") {

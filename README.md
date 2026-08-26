@@ -21,6 +21,11 @@ An independent, **MPE-capable fork** of the [sfizz] SFZ parser + synthesis C++ l
   PB / CP / CC#74 / Poly Key Pressure reads through the Manager Channel so a
   release tail stops responding to traffic on a now-reused Member Channel
   (§2.2.6 / §2.2.7 / §2.2.8).
+- **Fixed-channel SFZ routing** — `lochan` / `hichan` select regions from the
+  original MIDI source channel, with isolated CC conditions, keyswitches,
+  sequences and note/release ownership. This works with MPE disabled or enabled;
+  MPE-off expression remains legacy/global, while MPE Full retains its normal
+  Manager/Member message restrictions.
 - Parallel **C and C++ API** surfaces for the MPE additions.
 - A small **brand surface**: `#include <sfizioso.hpp>` exposes the engine under
   `namespace sfizioso` (with a `sfizioso::Sfizioso` alias of the engine class),

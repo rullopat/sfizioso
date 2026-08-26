@@ -42,6 +42,32 @@ public:
     void noteOffEvent(int delay, int noteNumber, float velocity) noexcept;
 
     /**
+     * @brief Track note eligibility state on the original source channel.
+     *
+     * This state is separate from the legacy/global note state above. It is
+     * used only by channel-restricted SFZ regions, so MPE-off expression
+     * routing can still collapse to channel 0 without losing lochan/hichan
+     * note ownership, velocity and legato state.
+     */
+    void sourceNoteOnEvent(int channel, int noteNumber, float velocity) noexcept;
+    void sourceNoteOffEvent(int channel, int noteNumber) noexcept;
+    int getSourceActiveNotes(int channel) const noexcept;
+    float getSourceNoteVelocity(int channel, int noteNumber) const noexcept;
+    float getSourceVelocityOverride(int channel) const noexcept;
+    bool isSourceNotePressed(int channel, int noteNumber) const noexcept;
+
+    /**
+     * @brief Track/read Polyphonic Key Pressure on its accepted source channel.
+     * Kept separate from expression state for MPE-off fixed-channel routing.
+     */
+    void sourcePolyAftertouchEvent(int channel, int noteNumber, float aftertouch) noexcept;
+    float getSourcePolyAftertouch(int channel, int noteNumber) const noexcept;
+    void sourcePitchBendEvent(int channel, float pitch) noexcept;
+    float getSourcePitchBend(int channel) const noexcept;
+    void sourceChannelAftertouchEvent(int channel, float aftertouch) noexcept;
+    float getSourceChannelAftertouch(int channel) const noexcept;
+
+    /**
      * @brief Set all notes off
      *
      * @param delay
@@ -201,6 +227,17 @@ public:
      * Out-of-range channels are silently ignored.
      */
     void ccEvent(int delay, int channel, int ccNumber, float ccValue) noexcept;
+
+    /**
+     * @brief Track/read accepted CC state on the original source channel.
+     * This scalar state is separate from expression event vectors so MPE-off
+     * lochan/hichan regions can compare CC triggers without changing the
+     * legacy channel-0 modulation contract. Defaults are copied to all source
+     * channels so a later channel-1 event cannot pollute another channel.
+     */
+    void sourceCCEvent(int channel, int ccNumber, float ccValue) noexcept;
+    float getSourceCCValue(int channel, int ccNumber) const noexcept;
+    void resetSourceCCStates() noexcept;
 
     /**
      * @brief Advances the internal clock of a given amount of samples.
@@ -387,6 +424,20 @@ private:
      */
     static constexpr int masterChannel = 0;
     std::array<ChannelState, 16> channelStates;
+
+    struct SourceNoteState {
+        std::bitset<128> pressed;
+        MidiNoteArray<uint16_t> noteCounts { { } };
+        MidiNoteArray<float> velocities { { } };
+        MidiNoteArray<float> polyAftertouch { { } };
+        int activeNotes { 0 };
+        int lastNotePlayed { -1 };
+        float velocityOverride { 0.0f };
+    };
+    std::array<SourceNoteState, 16> sourceNoteStates;
+    std::array<std::array<float, config::numCCs>, 16> sourceCCValues { { } };
+    std::array<float, 16> sourcePitchBends { { } };
+    std::array<float, 16> sourceChannelAftertouch { { } };
 
     // MPE 1.0 defaults: master = 2 st, per-note = 48 st.
     float mpeMasterPitchBendRange_ { 2.0f };

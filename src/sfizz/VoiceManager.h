@@ -52,7 +52,8 @@ struct VoiceManager final : public Voice::StateListener
      * @return true
      * @return false
      */
-    bool playingAttackVoice(const Region* releaseRegion) noexcept;
+    bool playingAttackVoice(const Region* releaseRegion,
+        int sourceChannel = -1) noexcept;
 
     /**
      * @brief Ensures that the polyphony groups are at least this size.

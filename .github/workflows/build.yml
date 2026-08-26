@@ -28,7 +28,7 @@ jobs:
         run: cmake --build build --target sfizz_static --config Release
 
   linux:
-    name: build (Linux)
+    name: build and test (Linux)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +42,10 @@ jobs:
         run: >
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           -DSFIZZ_JACK=OFF -DSFIZZ_RENDER=OFF -DSFIZZ_BENCHMARKS=OFF
-          -DSFIZZ_TESTS=OFF -DSFIZZ_DEMOS=OFF -DSFIZZ_DEVTOOLS=OFF -DSFIZZ_SHARED=OFF
+          -DSFIZZ_TESTS=ON -DSFIZZ_DEMOS=OFF -DSFIZZ_DEVTOOLS=OFF -DSFIZZ_SHARED=OFF
 
-      - name: Build engine (static library)
-        run: cmake --build build --target sfizz_static --config Release
+      - name: Build engine and test suite
+        run: cmake --build build --target sfizz_static sfizz_tests --config Release
+
+      - name: Run test suite
+        run: ./build/library/bin/sfizz_tests

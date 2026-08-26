@@ -647,12 +647,12 @@ SFIZZ_EXPORTED_API void sfizz_send_hd_poly_aftertouch(sfizz_synth_t* synth, int 
  * using the existing single-channel methods; they are equivalent to
  * calling the corresponding `_channel` method with channel = 0 (master).
  *
- * sfizz_set_mpe_enabled() gates channel routing engine-wide. With MPE
- * disabled, the `_channel` methods collapse channel to 0 internally so
- * both API surfaces behave identically (single-channel, pre-MPE
- * semantics). With MPE enabled, the channel argument is honoured
- * end-to-end and the MPE 1.0 spec-compliance filters (Manager-only
- * CCs, member-channel Poly KP) apply.
+ * The original channel is always retained as the source channel for SFZ
+ * lochan/hichan eligibility and source-scoped conditions on restricted
+ * regions. With MPE disabled, only expression routing collapses to channel
+ * 0, preserving legacy modulation and omni-region ownership. With MPE
+ * enabled, source and expression channels are identical and the MPE 1.0
+ * compliance filters (Manager-only CCs, member-channel Poly KP) apply.
  *
  * @{
  */
@@ -824,9 +824,9 @@ SFIZZ_EXPORTED_API void sfizz_send_hd_poly_aftertouch_channel(sfizz_synth_t* syn
 /**
  * @brief Enable or disable MPE mode.
  *
- * Gates same-channel-preference voice stealing inside the engine.
- * Per-channel input dispatch (the `_mpe` send functions above) works
- * regardless of this flag.
+ * Source-channel SFZ routing works regardless of this flag. Enabling MPE
+ * additionally keeps expression per channel, applies Manager/Member message
+ * filters, MPE bend ranges and same-channel-preference voice stealing.
  *
  * @param synth    The synth.
  * @param enabled  Whether MPE mode is enabled.

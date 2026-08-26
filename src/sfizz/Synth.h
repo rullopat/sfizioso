@@ -546,18 +546,16 @@ public:
     // === MPE (MIDI Polyphonic Expression) support ============================
     //
     // The methods below mirror the existing single-channel input API but take
-    // an additional MIDI channel argument (0..15). They populate per-channel
-    // modulation state in MidiState so voices triggered on a member channel
-    // respond independently to per-note pitch bend, per-note CC, and per-note
-    // aftertouch. Hosts that don't care about MPE can keep using the existing
-    // single-channel methods, which forward to the MPE variants with channel
-    // = 0 (master).
+    // an additional MIDI channel argument (0..15). The original channel is
+    // always retained as the source channel for lochan/hichan eligibility,
+    // channel-scoped region conditions and restricted-region note ownership.
+    // Hosts that don't need channels can keep using the existing methods,
+    // which forward here with source channel 0 (MIDI channel 1).
     //
-    // setMPEEnabled() is informational for now: it gates how the engine will
-    // interpret RPN-derived pitch-bend ranges and how voice stealing prefers
-    // same-channel candidates (follow-up commits). Per-channel input dispatch
-    // works regardless of the flag — calling pitchWheel(channel=2, ...)
-    // always lands in MidiState's channel-2 slot.
+    // With MPE disabled, expression routing still collapses to channel 0 so
+    // omni regions retain pre-MPE modulation, voice stealing and Note Off
+    // behavior. With MPE enabled, source and expression channels are the same;
+    // per-note modulation and the MPE compliance filters apply end-to-end.
 
     /**
      * @brief Send a note on event on a specific MIDI channel (0..15).
@@ -609,11 +607,10 @@ public:
     void hdPolyAftertouch(int delay, int channel, int noteNumber, float normAftertouch) noexcept;
 
     /**
-     * @brief Enable or disable MPE mode. The flag is stored on the synth and
-     * surfaced via getMPEEnabled(). Per-channel input dispatch works whether
-     * or not this is set; the flag is consumed by features that need to know
-     * the current zone (RPN-driven pitch-bend range application, MPE-aware
-     * voice stealing). Default is false.
+     * @brief Enable or disable MPE expression mode. Source-channel SFZ routing
+     * remains active in either mode; this flag controls per-channel expression,
+     * MPE message filtering, bend-range handling and MPE-aware voice stealing.
+     * Default is false.
      */
     void setMPEEnabled(bool enabled) noexcept;
     /**

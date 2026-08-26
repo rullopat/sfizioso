@@ -562,15 +562,17 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
     impl.saveModulationTargets(&region);
 
     if (region.checkSustain) {
-        const bool sustainPressed =
-            midiState.getCCValue(region.sustainCC) >= region.sustainThreshold;
+        const bool sustainPressed = region.isChannelRestricted()
+            ? layer->isSustainPressed(event.sourceChannel)
+            : midiState.getCCValue(region.sustainCC) >= region.sustainThreshold;
         impl.sustainState_ =
             sustainPressed ? Impl::SustainState::Sustaining : Impl::SustainState::Up;
     }
 
     if (region.checkSostenuto) {
-        const bool sostenutoPressed =
-            midiState.getCCValue(region.sostenutoCC) >= region.sostenutoThreshold;
+        const bool sostenutoPressed = region.isChannelRestricted()
+            ? layer->isSostenutoPressed(event.sourceChannel)
+            : midiState.getCCValue(region.sostenutoCC) >= region.sostenutoThreshold;
         impl.sostenutoState_ =
             sostenutoPressed ? Impl::SostenutoState::PreviouslyDown : Impl::SostenutoState::Up;
     }
@@ -656,7 +658,8 @@ void Voice::Impl::off(int delay, bool fast) noexcept
     release(delay);
 }
 
-void Voice::registerNoteOff(int delay, int channel, int noteNumber, float velocity) noexcept
+void Voice::registerNoteOff(int delay, int expressionChannel, int sourceChannel,
+    int noteNumber, float velocity) noexcept
 {
     ASSERT(velocity >= 0.0 && velocity <= 1.0);
     UNUSED(velocity);
@@ -668,8 +671,12 @@ void Voice::registerNoteOff(int delay, int channel, int noteNumber, float veloci
     if (impl.state_ != State::playing)
         return;
 
+    const bool channelMatches = impl.region_->isChannelRestricted()
+        ? impl.triggerEvent_.sourceChannel == sourceChannel
+        : impl.triggerEvent_.channel == expressionChannel;
+
     if (impl.triggerEvent_.number == noteNumber
-        && impl.triggerEvent_.channel == channel
+        && channelMatches
         && impl.triggerEvent_.type == TriggerEventType::NoteOn) {
         impl.noteIsOff_ = true;
 
@@ -687,7 +694,8 @@ void Voice::registerNoteOff(int delay, int channel, int noteNumber, float veloci
     }
 }
 
-void Voice::registerCC(int delay, int ccNumber, float ccValue) noexcept
+void Voice::registerCC(int delay, int sourceChannel, int ccNumber, float ccValue,
+    bool sourceScoped) noexcept
 {
     Impl& impl = *impl_;
     if (impl.region_ == nullptr)
@@ -696,6 +704,10 @@ void Voice::registerCC(int delay, int ccNumber, float ccValue) noexcept
     const Region& region = *impl.region_;
 
     if (impl.state_ != State::playing)
+        return;
+
+    if (sourceScoped && region.isChannelRestricted()
+        && impl.triggerEvent_.sourceChannel != sourceChannel)
         return;
 
     if (ccNumber != region.sustainCC && ccNumber != region.sostenutoCC)
@@ -1726,7 +1738,8 @@ bool Voice::Impl::released() const noexcept
         return flexEGs_[*region_->flexAmpEG]->isReleased();
 }
 
-bool Voice::checkOffGroup(const Region* other, int delay, int noteNumber) noexcept
+bool Voice::checkOffGroup(const Region* other, int delay, int noteNumber,
+    int sourceChannel) noexcept
 {
     Impl& impl = *impl_;
     const Layer* layer = impl.layer_;
@@ -1737,10 +1750,16 @@ bool Voice::checkOffGroup(const Region* other, int delay, int noteNumber) noexce
     if (impl.offed_)
         return false;
 
+    if (region->isChannelRestricted()
+        && impl.triggerEvent_.sourceChannel != sourceChannel)
+        return false;
+
     if ((impl.triggerEvent_.type == TriggerEventType::NoteOn
-            ||  impl.triggerEvent_.type == TriggerEventType::CC)
+            || impl.triggerEvent_.type == TriggerEventType::CC)
         && region->offBy && *region->offBy == other->group
-        && (region->group != other->group || !layer->ccSwitched_.all() || noteNumber != impl.triggerEvent_.number)) {
+        && (region->group != other->group
+            || !layer->isCcSwitchedOn(impl.triggerEvent_.sourceChannel)
+            || noteNumber != impl.triggerEvent_.number)) {
         off(delay);
         return true;
     }

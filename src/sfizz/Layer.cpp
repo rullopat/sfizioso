@@ -9,6 +9,7 @@
 #include "utility/Debug.h"
 #include "utility/SwapAndPop.h"
 #include <absl/algorithm/container.h>
+#include <algorithm>
 
 namespace sfz {
 
@@ -40,89 +41,156 @@ void Layer::initializeActivations()
     aftertouchSwitched_ = true;
     programSwitched_ = true;
     ccSwitched_.set();
+    sustainPressed_ = false;
+    sostenutoPressed_ = false;
+    sequenceCounter_ = 0;
+
+    if (region.isChannelRestricted()) {
+        if (!sourceStates_)
+            sourceStates_ = std::make_unique<std::array<SourceActivationState, 16>>();
+        for (SourceActivationState& state : *sourceStates_) {
+            state.keySwitched = !region.usesKeySwitches;
+            state.previousKeySwitched = !region.usesPreviousKeySwitches;
+            state.sequenceSwitched = !region.usesSequenceSwitches;
+            state.pitchSwitched = true;
+            state.aftertouchSwitched = true;
+            state.sustainPressed = false;
+            state.sostenutoPressed = false;
+            state.ccSwitched.set();
+            state.sequenceCounter = 0;
+        }
+    } else {
+        sourceStates_.reset();
+    }
+
+    delayedSustainReleases_.clear();
+    delayedSostenutoReleases_.clear();
+    sourceDelayedSustainReleases_.clear();
+    sourceDelayedSostenutoReleases_.clear();
 }
 
-bool Layer::isSwitchedOn() const noexcept
+bool Layer::isSourceChannelEligible(int sourceChannel) const noexcept
 {
-    return keySwitched_ && previousKeySwitched_ && sequenceSwitched_ && pitchSwitched_
-        && programSwitched_ && bpmSwitched_ && aftertouchSwitched_ && ccSwitched_.all();
+    return sourceChannel >= 0 && sourceChannel < 16
+        && region_.channelRange.containsWithEnd(sourceChannel + 1);
 }
 
-bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue) noexcept
+bool Layer::isSwitchedOn(int sourceChannel) const noexcept
+{
+    if (!region_.isChannelRestricted()) {
+        return keySwitched_ && previousKeySwitched_ && sequenceSwitched_ && pitchSwitched_
+            && programSwitched_ && bpmSwitched_ && aftertouchSwitched_ && ccSwitched_.all();
+    }
+
+    if (!isSourceChannelEligible(sourceChannel))
+        return false;
+
+    const SourceActivationState& state = (*sourceStates_)[sourceChannel];
+    return state.keySwitched && state.previousKeySwitched && state.sequenceSwitched
+        && state.pitchSwitched && programSwitched_ && bpmSwitched_
+        && state.aftertouchSwitched && state.ccSwitched.all();
+}
+
+bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue, int sourceChannel) noexcept
 {
     ASSERT(velocity >= 0.0f && velocity <= 1.0f);
 
     const Region& region = region_;
+    if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
+        return false;
 
     const bool keyOk = region.keyRange.containsWithEnd(noteNumber);
     if (keyOk) {
-        // Sequence activation
-        sequenceSwitched_ =
-            ((sequenceCounter_++ % region.sequenceLength) == region.sequencePosition - 1);
+        if (region.isChannelRestricted()) {
+            SourceActivationState& state = (*sourceStates_)[sourceChannel];
+            state.sequenceSwitched = ((state.sequenceCounter++ % region.sequenceLength) == region.sequencePosition - 1);
+        } else {
+            sequenceSwitched_ = ((sequenceCounter_++ % region.sequenceLength) == region.sequencePosition - 1);
+        }
     }
 
-    const bool polyAftertouchActive =
-        region.polyAftertouchRange.containsWithEnd(midiState_.getPolyAftertouch(noteNumber));
+    const bool polyAftertouchActive = region.isChannelRestricted()
+        ? region.polyAftertouchRange.containsWithEnd(
+              midiState_.getSourcePolyAftertouch(sourceChannel, noteNumber))
+        : region.polyAftertouchRange.containsWithEnd(midiState_.getPolyAftertouch(noteNumber));
 
-    if (!isSwitchedOn() || !polyAftertouchActive)
+    if (!isSwitchedOn(sourceChannel) || !polyAftertouchActive)
         return false;
 
     if (!region.triggerOnNote)
         return false;
 
-    if (region.velocityOverride == VelocityOverride::previous)
-        velocity = midiState_.getVelocityOverride();
+    if (region.velocityOverride == VelocityOverride::previous) {
+        velocity = region.isChannelRestricted()
+            ? midiState_.getSourceVelocityOverride(sourceChannel)
+            : midiState_.getVelocityOverride();
+    }
 
     const bool velOk = region.velocityRange.containsWithEnd(velocity);
-    const bool randOk = region.randRange.contains(randValue) || (randValue >= 1.0f && region.randRange.isValid() && region.randRange.getEnd() >= 1.0f);
-    const bool firstLegatoNote = (region.trigger == Trigger::first && midiState_.getActiveNotes() == 1);
+    const bool randOk = region.randRange.contains(randValue)
+        || (randValue >= 1.0f && region.randRange.isValid() && region.randRange.getEnd() >= 1.0f);
+    const int activeNotes = region.isChannelRestricted()
+        ? midiState_.getSourceActiveNotes(sourceChannel)
+        : midiState_.getActiveNotes();
+    const bool firstLegatoNote = (region.trigger == Trigger::first && activeNotes == 1);
     const bool attackTrigger = (region.trigger == Trigger::attack);
-    const bool notFirstLegatoNote = (region.trigger == Trigger::legato && midiState_.getActiveNotes() > 1);
+    const bool notFirstLegatoNote = (region.trigger == Trigger::legato && activeNotes > 1);
 
     return keyOk && velOk && randOk && (attackTrigger || firstLegatoNote || notFirstLegatoNote);
 }
 
-bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue) noexcept
+bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue,
+    int sourceChannel, int expressionChannel) noexcept
 {
     ASSERT(velocity >= 0.0f && velocity <= 1.0f);
 
     const Region& region = region_;
+    if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
+        return false;
 
-    const bool polyAftertouchActive =
-        region.polyAftertouchRange.containsWithEnd(midiState_.getPolyAftertouch(noteNumber));
+    const bool polyAftertouchActive = region.isChannelRestricted()
+        ? region.polyAftertouchRange.containsWithEnd(
+              midiState_.getSourcePolyAftertouch(sourceChannel, noteNumber))
+        : region.polyAftertouchRange.containsWithEnd(midiState_.getPolyAftertouch(noteNumber));
 
-    if (!isSwitchedOn() || !polyAftertouchActive)
+    if (!isSwitchedOn(sourceChannel) || !polyAftertouchActive)
         return false;
 
     if (!region.triggerOnNote)
         return false;
 
-    // Prerequisites
-
     const bool keyOk = region.keyRange.containsWithEnd(noteNumber);
     const bool velOk = region.velocityRange.containsWithEnd(velocity);
-    const bool randOk = region.randRange.contains(randValue) || (randValue >= 1.0f && region.randRange.isValid() && region.randRange.getEnd() >= 1.0f);
+    const bool randOk = region.randRange.contains(randValue)
+        || (randValue >= 1.0f && region.randRange.isValid() && region.randRange.getEnd() >= 1.0f);
 
     if (!(velOk && keyOk && randOk))
         return false;
-
-    // Release logic
 
     if (region.trigger == Trigger::release_key)
         return true;
 
     if (region.trigger == Trigger::release) {
-        const bool sostenutoed = isNoteSostenutoed(noteNumber);
+        const bool sostenutoed = isNoteSostenutoed(noteNumber, sourceChannel);
+        const bool sostenutoPressed = region.isChannelRestricted()
+            ? (*sourceStates_)[sourceChannel].sostenutoPressed
+            : sostenutoPressed_;
+        const bool sustainPressed = region.isChannelRestricted()
+            ? (*sourceStates_)[sourceChannel].sustainPressed
+            : sustainPressed_;
+        const float noteVelocity = region.isChannelRestricted()
+            ? midiState_.getSourceNoteVelocity(sourceChannel, noteNumber)
+            : midiState_.getNoteVelocity(noteNumber);
 
-        if (sostenutoed && !sostenutoPressed_) {
-            removeFromSostenutoReleases(noteNumber);
-            if (sustainPressed_)
-                delaySustainRelease(noteNumber, midiState_.getNoteVelocity(noteNumber));
+        if (sostenutoed && !sostenutoPressed) {
+            removeFromSostenutoReleases(noteNumber, sourceChannel);
+            if (sustainPressed)
+                delaySustainRelease(noteNumber, noteVelocity, sourceChannel, expressionChannel);
         }
 
-        if (!sostenutoPressed_ || !sostenutoed) {
-            if (sustainPressed_)
-                delaySustainRelease(noteNumber, midiState_.getNoteVelocity(noteNumber));
+        if (!sostenutoPressed || !sostenutoed) {
+            if (sustainPressed)
+                delaySustainRelease(noteNumber, noteVelocity, sourceChannel, expressionChannel);
             else
                 return true;
         }
@@ -131,37 +199,66 @@ bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue) noe
     return false;
 }
 
-void Layer::updateCCState(int ccNumber, float ccValue) noexcept
+void Layer::updateCCState(int ccNumber, float ccValue, int sourceChannel,
+    int expressionChannel) noexcept
 {
     const Region& region = region_;
+    if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
+        return;
 
+    if (!region.isChannelRestricted()) {
+        if (ccNumber == region.sustainCC)
+            sustainPressed_ = region.checkSustain && ccValue >= region.sustainThreshold;
+
+        if (ccNumber == region.sostenutoCC) {
+            const bool newState = region.checkSostenuto && ccValue >= region.sostenutoThreshold;
+            if (!sostenutoPressed_ && newState)
+                storeSostenutoNotes();
+
+            if (!newState && sostenutoPressed_)
+                delayedSostenutoReleases_.clear();
+
+            sostenutoPressed_ = newState;
+        }
+
+        if (const auto conditions = region.ccConditions.get(ccNumber))
+            ccSwitched_.set(ccNumber, conditions->containsWithEnd(ccValue));
+        return;
+    }
+
+    SourceActivationState& state = (*sourceStates_)[sourceChannel];
     if (ccNumber == region.sustainCC)
-        sustainPressed_ = region.checkSustain && ccValue >= region.sustainThreshold;
+        state.sustainPressed = region.checkSustain && ccValue >= region.sustainThreshold;
 
     if (ccNumber == region.sostenutoCC) {
         const bool newState = region.checkSostenuto && ccValue >= region.sostenutoThreshold;
-        if (!sostenutoPressed_ && newState)
-            storeSostenutoNotes();
+        if (!state.sostenutoPressed && newState)
+            storeSostenutoNotes(sourceChannel, expressionChannel);
 
-        if (!newState && sostenutoPressed_)
-            delayedSostenutoReleases_.clear();
+        if (!newState && state.sostenutoPressed) {
+            auto& releases = sourceDelayedSostenutoReleases_;
+            releases.erase(std::remove_if(releases.begin(), releases.end(),
+                               [=](const DelayedRelease& release) {
+                                   return release.sourceChannel == sourceChannel;
+                               }),
+                releases.end());
+        }
 
-        sostenutoPressed_ = newState;
+        state.sostenutoPressed = newState;
     }
 
-    const auto conditions = region.ccConditions.get(ccNumber);
-
-    if (!conditions)
-        return;
-
-    ccSwitched_.set(ccNumber, conditions->containsWithEnd(ccValue));
+    if (const auto conditions = region.ccConditions.get(ccNumber))
+        state.ccSwitched.set(ccNumber, conditions->containsWithEnd(ccValue));
 }
 
-bool Layer::registerCC(int ccNumber, float ccValue, float randValue, int extendedArg) noexcept
+bool Layer::registerCC(int ccNumber, float ccValue, float randValue,
+    int extendedArg, int sourceChannel, int expressionChannel) noexcept
 {
     const Region& region = region_;
+    if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
+        return false;
 
-    updateCCState(ccNumber, ccValue);
+    updateCCState(ccNumber, ccValue, sourceChannel, expressionChannel);
 
     if (!region.triggerOnCC)
         return false;
@@ -176,24 +273,37 @@ bool Layer::registerCC(int ccNumber, float ccValue, float randValue, int extende
         if (!triggerRange->containsWithEnd(ccValue))
             return false;
 
-        // only respect this polyAT trigger if the note number is one of ours
-        if (ccNumber == ExtendedCCs::polyphonicAftertouch && extendedArg >= 0 && !region.keyRange.containsWithEnd(extendedArg)) {
+        if (ccNumber == ExtendedCCs::polyphonicAftertouch && extendedArg >= 0
+            && !region.keyRange.containsWithEnd(extendedArg))
             return false;
+
+        if (region.isChannelRestricted()) {
+            SourceActivationState& state = (*sourceStates_)[sourceChannel];
+            state.sequenceSwitched = ((state.sequenceCounter++ % region.sequenceLength) == region.sequencePosition - 1);
+        } else {
+            sequenceSwitched_ = ((sequenceCounter_++ % region.sequenceLength) == region.sequencePosition - 1);
         }
 
-        sequenceSwitched_ =
-            ((sequenceCounter_++ % region.sequenceLength) == region.sequencePosition - 1);
-
-        if (isSwitchedOn() && (ccNumber == ExtendedCCs::polyphonicAftertouch || ccValue != midiState_.getCCValue(ccNumber)))
+        const float previousValue = region.isChannelRestricted()
+            ? midiState_.getSourceCCValue(sourceChannel, ccNumber)
+            : midiState_.getCCValue(expressionChannel, ccNumber);
+        if (isSwitchedOn(sourceChannel)
+            && (ccNumber == ExtendedCCs::polyphonicAftertouch
+                || ccValue != previousValue))
             return true;
     }
 
     return false;
 }
 
-void Layer::registerPitchWheel(float pitch) noexcept
+void Layer::registerPitchWheel(float pitch, int sourceChannel) noexcept
 {
-    pitchSwitched_ = region_.bendRange.containsWithEnd(pitch);
+    if (!region_.isChannelRestricted()) {
+        pitchSwitched_ = region_.bendRange.containsWithEnd(pitch);
+        return;
+    }
+    if (isSourceChannelEligible(sourceChannel))
+        (*sourceStates_)[sourceChannel].pitchSwitched = region_.bendRange.containsWithEnd(pitch);
 }
 
 void Layer::registerProgramChange(int program) noexcept
@@ -201,9 +311,14 @@ void Layer::registerProgramChange(int program) noexcept
     programSwitched_ = region_.programRange.containsWithEnd(program);
 }
 
-void Layer::registerAftertouch(float aftertouch) noexcept
+void Layer::registerAftertouch(float aftertouch, int sourceChannel) noexcept
 {
-    aftertouchSwitched_ = region_.aftertouchRange.containsWithEnd(aftertouch);
+    if (!region_.isChannelRestricted()) {
+        aftertouchSwitched_ = region_.aftertouchRange.containsWithEnd(aftertouch);
+        return;
+    }
+    if (isSourceChannelEligible(sourceChannel))
+        (*sourceStates_)[sourceChannel].aftertouchSwitched = region_.aftertouchRange.containsWithEnd(aftertouch);
 }
 
 void Layer::registerTempo(float secondsPerQuarter) noexcept
@@ -212,52 +327,156 @@ void Layer::registerTempo(float secondsPerQuarter) noexcept
     bpmSwitched_ = region_.bpmRange.containsWithEnd(bpm);
 }
 
-void Layer::delaySustainRelease(int noteNumber, float velocity) noexcept
+void Layer::setKeySwitched(int sourceChannel, bool value) noexcept
 {
-    if (delayedSustainReleases_.size() == delayedSustainReleases_.capacity())
+    if (!region_.isChannelRestricted()) {
+        keySwitched_ = value;
         return;
-
-    delayedSustainReleases_.emplace_back(noteNumber, velocity);
+    }
+    if (isSourceChannelEligible(sourceChannel))
+        (*sourceStates_)[sourceChannel].keySwitched = value;
 }
 
-void Layer::delaySostenutoRelease(int noteNumber, float velocity) noexcept
+void Layer::setPreviousKeySwitched(int sourceChannel, bool value) noexcept
 {
-    if (delayedSostenutoReleases_.size() == delayedSostenutoReleases_.capacity())
+    if (!region_.isChannelRestricted()) {
+        previousKeySwitched_ = value;
         return;
-
-    delayedSostenutoReleases_.emplace_back(noteNumber, velocity);
+    }
+    if (isSourceChannelEligible(sourceChannel))
+        (*sourceStates_)[sourceChannel].previousKeySwitched = value;
 }
 
-void Layer::removeFromSostenutoReleases(int noteNumber) noexcept
+bool Layer::isCcSwitchedOn(int sourceChannel) const noexcept
 {
-    swapAndPopFirst(delayedSostenutoReleases_, [=](const std::pair<int, float>& p) {
-        return p.first == noteNumber;
-    });
+    if (!region_.isChannelRestricted())
+        return ccSwitched_.all();
+    return isSourceChannelEligible(sourceChannel)
+        && (*sourceStates_)[sourceChannel].ccSwitched.all();
 }
 
-void Layer::storeSostenutoNotes() noexcept
+void Layer::reserveDelayedReleaseCapacity(size_t capacity)
 {
-    ASSERT(delayedSostenutoReleases_.empty());
-    const Region& region = region_;
-    for (int note = region.keyRange.getStart(); note <= region.keyRange.getEnd(); ++note) {
-        if (midiState_.isNotePressed(note))
-            delaySostenutoRelease(note, midiState_.getNoteVelocity(note));
+    delayedSustainReleases_.reserve(capacity);
+    delayedSostenutoReleases_.reserve(capacity);
+    if (region_.isChannelRestricted()) {
+        // Bound the per-region increase: enough for the legacy delayed-release
+        // allowance on all 16 sources, without multiplying a 128-key range by
+        // 16 (which would reserve tens of KiB for every release region).
+        const size_t sourceCapacity = std::max(
+            capacity, static_cast<size_t>(config::delayedReleaseVoices) * 16);
+        sourceDelayedSustainReleases_.reserve(sourceCapacity);
+        sourceDelayedSostenutoReleases_.reserve(sourceCapacity);
     }
 }
 
-
-bool Layer::isNoteSustained(int noteNumber) const noexcept
+void Layer::delaySustainRelease(int noteNumber, float velocity,
+    int sourceChannel, int expressionChannel) noexcept
 {
-    return absl::c_find_if(delayedSustainReleases_, [=](const std::pair<int, float>& p) {
-        return p.first == noteNumber;
-    }) != delayedSustainReleases_.end();
+    if (!region_.isChannelRestricted()) {
+        if (delayedSustainReleases_.size() == delayedSustainReleases_.capacity())
+            return;
+        delayedSustainReleases_.emplace_back(noteNumber, velocity);
+        return;
+    }
+
+    if (sourceDelayedSustainReleases_.size() == sourceDelayedSustainReleases_.capacity())
+        return;
+    sourceDelayedSustainReleases_.push_back(
+        { noteNumber, velocity, sourceChannel, expressionChannel });
 }
 
-bool Layer::isNoteSostenutoed(int noteNumber) const noexcept
+void Layer::delaySostenutoRelease(int noteNumber, float velocity,
+    int sourceChannel, int expressionChannel) noexcept
 {
-    return absl::c_find_if(delayedSostenutoReleases_, [=](const std::pair<int, float>& p) {
-        return p.first == noteNumber;
-    }) != delayedSostenutoReleases_.end();
+    if (!region_.isChannelRestricted()) {
+        if (delayedSostenutoReleases_.size() == delayedSostenutoReleases_.capacity())
+            return;
+        delayedSostenutoReleases_.emplace_back(noteNumber, velocity);
+        return;
+    }
+
+    if (sourceDelayedSostenutoReleases_.size() == sourceDelayedSostenutoReleases_.capacity())
+        return;
+    sourceDelayedSostenutoReleases_.push_back(
+        { noteNumber, velocity, sourceChannel, expressionChannel });
+}
+
+void Layer::removeFromSostenutoReleases(int noteNumber, int sourceChannel) noexcept
+{
+    if (!region_.isChannelRestricted()) {
+        swapAndPopFirst(delayedSostenutoReleases_, [=](const std::pair<int, float>& p) {
+            return p.first == noteNumber;
+        });
+        return;
+    }
+
+    swapAndPopFirst(sourceDelayedSostenutoReleases_, [=](const DelayedRelease& release) {
+        return release.noteNumber == noteNumber && release.sourceChannel == sourceChannel;
+    });
+}
+
+void Layer::storeSostenutoNotes(int sourceChannel, int expressionChannel) noexcept
+{
+    const Region& region = region_;
+    if (!region.isChannelRestricted()) {
+        ASSERT(delayedSostenutoReleases_.empty());
+        for (int note = region.keyRange.getStart(); note <= region.keyRange.getEnd(); ++note) {
+            if (midiState_.isNotePressed(note))
+                delaySostenutoRelease(note, midiState_.getNoteVelocity(note));
+        }
+        return;
+    }
+
+    for (int note = region.keyRange.getStart(); note <= region.keyRange.getEnd(); ++note) {
+        if (midiState_.isSourceNotePressed(sourceChannel, note)) {
+            delaySostenutoRelease(note,
+                midiState_.getSourceNoteVelocity(sourceChannel, note),
+                sourceChannel, expressionChannel);
+        }
+    }
+}
+
+bool Layer::isNoteSustained(int noteNumber, int sourceChannel) const noexcept
+{
+    if (!region_.isChannelRestricted()) {
+        return absl::c_find_if(delayedSustainReleases_, [=](const std::pair<int, float>& p) {
+            return p.first == noteNumber;
+        }) != delayedSustainReleases_.end();
+    }
+
+    return absl::c_find_if(sourceDelayedSustainReleases_, [=](const DelayedRelease& release) {
+        return release.noteNumber == noteNumber && release.sourceChannel == sourceChannel;
+    }) != sourceDelayedSustainReleases_.end();
+}
+
+bool Layer::isNoteSostenutoed(int noteNumber, int sourceChannel) const noexcept
+{
+    if (!region_.isChannelRestricted()) {
+        return absl::c_find_if(delayedSostenutoReleases_, [=](const std::pair<int, float>& p) {
+            return p.first == noteNumber;
+        }) != delayedSostenutoReleases_.end();
+    }
+
+    return absl::c_find_if(sourceDelayedSostenutoReleases_, [=](const DelayedRelease& release) {
+        return release.noteNumber == noteNumber && release.sourceChannel == sourceChannel;
+    }) != sourceDelayedSostenutoReleases_.end();
+}
+
+bool Layer::isSustainPressed(int sourceChannel) const noexcept
+{
+    if (!region_.isChannelRestricted())
+        return sustainPressed_;
+    return isSourceChannelEligible(sourceChannel)
+        && (*sourceStates_)[sourceChannel].sustainPressed;
+}
+
+bool Layer::isSostenutoPressed(int sourceChannel) const noexcept
+{
+    if (!region_.isChannelRestricted())
+        return sostenutoPressed_;
+    return isSourceChannelEligible(sourceChannel)
+        && (*sourceStates_)[sourceChannel].sostenutoPressed;
 }
 
 } // namespace sfz

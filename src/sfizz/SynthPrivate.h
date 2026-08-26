@@ -133,7 +133,8 @@ struct Synth::Impl final: public Parser::Listener {
      * @param noteNumber
      * @param velocity
      */
-    void noteOnDispatch(int delay, int channel, int noteNumber, float velocity) noexcept;
+    void noteOnDispatch(int delay, int sourceChannel, int expressionChannel,
+        int noteNumber, float velocity) noexcept;
 
     /**
      * @brief Check all regions and start voices for note off events
@@ -145,7 +146,9 @@ struct Synth::Impl final: public Parser::Listener {
      * @param noteNumber
      * @param velocity
      */
-    void noteOffDispatch(int delay, int channel, int noteNumber, float velocity) noexcept;
+    void noteOffDispatch(int delay, int sourceChannel, int expressionChannel,
+        int noteNumber, float globalVelocity,
+        float sourceVelocity) noexcept;
 
     /**
      * @brief Check all regions and start voices for cc events
@@ -155,7 +158,9 @@ struct Synth::Impl final: public Parser::Listener {
      * @param value
      * @param extendedArg used for some extendedCC (eg. polyaftertouch note num, etc)
      */
-    void ccDispatch(int delay, int channel, int ccNumber, float value, int extendedArg=-1) noexcept;
+    void ccDispatch(int delay, int sourceChannel, int expressionChannel,
+        int ccNumber, float value, bool sourceScoped,
+        int extendedArg = -1) noexcept;
 
     /**
      * @brief Start a voice for a specific region.
@@ -175,7 +180,8 @@ struct Synth::Impl final: public Parser::Listener {
      * @param delay
      * @param ring
      */
-    void startDelayedSustainReleases(Layer* layer, int delay, SisterVoiceRingBuilder& ring) noexcept;
+    void startDelayedSustainReleases(Layer* layer, int delay, int sourceChannel,
+        bool sourceScoped, SisterVoiceRingBuilder& ring) noexcept;
 
     /**
      * @brief Start all delayed sostenuto release voices of the region if necessary
@@ -184,7 +190,8 @@ struct Synth::Impl final: public Parser::Listener {
      * @param delay
      * @param ring
      */
-    void startDelayedSostenutoReleases(Layer* layer, int delay, SisterVoiceRingBuilder& ring) noexcept;
+    void startDelayedSostenutoReleases(Layer* layer, int delay, int sourceChannel,
+        bool sourceScoped, SisterVoiceRingBuilder& ring) noexcept;
 
     /**
      * @brief Reset the default CCs
@@ -276,7 +283,8 @@ struct Synth::Impl final: public Parser::Listener {
      * @param delay
      * @param number
      */
-    void checkOffGroups(const Region* region, int delay, int number, bool chokedByCC = false);
+    void checkOffGroups(const Region* region, int delay, int number,
+        int sourceChannel, bool chokedByCC = false);
 
     /**
      * @brief Resets the callback duration breakdown to 0
@@ -304,8 +312,11 @@ struct Synth::Impl final: public Parser::Listener {
     std::vector<NoteNamePair> keyswitchLabels_;
     std::map<int, size_t> keyswitchLabelsMap_;
 
-    // Set as sw_default if present in the file
+    // Set as sw_default if present in the file. The legacy value serves
+    // omni regions; fixed-channel regions additionally track one current
+    // last-keyswitch per original MIDI source channel.
     absl::optional<uint8_t> currentSwitch_;
+    std::array<absl::optional<uint8_t>, 16> sourceCurrentSwitch_;
     std::vector<std::string> unknownOpcodes_;
     using RegionViewVector = std::vector<Region*>;
     using LayerViewVector = std::vector<Layer*>;
@@ -405,10 +416,9 @@ struct Synth::Impl final: public Parser::Listener {
 
     bool playheadMoved_ { false };
 
-    // MPE state. Storage only — the Synth dispatch path handles per-channel
-    // event routing whether or not mpeEnabled_ is set; the flag is consumed
-    // by features that need zone awareness (RPN-driven pitch-bend range
-    // application, MPE-aware voice stealing) added in follow-up commits.
+    // MPE expression state. Source channels are always retained for fixed SFZ
+    // routing; this flag decides whether expression also follows that channel
+    // and enables zone filtering, MPE bend handling and voice-steal preference.
     bool mpeEnabled_ { false };
     float mpeMasterPitchBendRange_ { 2.0f };
     float mpePerNotePitchBendRange_ { 48.0f };

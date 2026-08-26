@@ -279,6 +279,13 @@ struct Region {
     // Region logic: MIDI conditions
     UncheckedRange<float> bendRange { Default::loBend, Default::hiBend }; // hibend and lobend
     UncheckedRange<uint8_t> programRange { Default::loProgram, Default::hiProgram }; // loprog and hiprog
+    UncheckedRange<uint8_t> channelRange { Default::loChannel, Default::hiChannel }; // lochan and hichan, SFZ domain 1..16
+
+    bool isChannelRestricted() const noexcept
+    {
+        return channelRange.getStart() != Default::loChannel
+            || channelRange.getEnd() != Default::hiChannel;
+    }
     CCMap<UncheckedRange<float>> ccConditions {{ Default::loCC, Default::hiCC }};
     absl::optional<uint8_t> lastKeyswitch {}; // sw_last
     absl::optional<UncheckedRange<uint8_t>> lastKeyswitchRange {}; // sw_last

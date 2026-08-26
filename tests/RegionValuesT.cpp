@@ -412,6 +412,24 @@ TEST_CASE("Read values", "[parsing][OSC]")
         REQUIRE_THAT( d.readAll<int32_t>("/region3/program_range"), Catch::Approx(std::vector<int32_t>{ 0, 127 }));
     }
 
+    SECTION("Channel range")
+    {
+        d.load(R"(
+            <region> sample=kick.wav
+            <region> sample=kick.wav lochan=2 hichan=7
+            <region> sample=kick.wav lochan=0 hichan=17
+            <region> sample=kick.wav lochan=16 hichan=16
+        )");
+        REQUIRE_THAT(d.readAll<int32_t>("/region0/channel_range"),
+            Catch::Approx(std::vector<int32_t> { 1, 16 }));
+        REQUIRE_THAT(d.readAll<int32_t>("/region1/channel_range"),
+            Catch::Approx(std::vector<int32_t> { 2, 7 }));
+        REQUIRE_THAT(d.readAll<int32_t>("/region2/channel_range"),
+            Catch::Approx(std::vector<int32_t> { 1, 16 }));
+        REQUIRE_THAT(d.readAll<int32_t>("/region3/channel_range"),
+            Catch::Approx(std::vector<int32_t> { 16, 16 }));
+    }
+
     SECTION("CC condition basic")
     {
         d.load(R"(

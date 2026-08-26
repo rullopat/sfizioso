@@ -27,6 +27,13 @@ struct TriggerEvent
      * to the correct slot in MidiState's per-channel storage.
      */
     int channel { 0 };
+    /**
+     * @brief Original MIDI source channel (0..15), before MPE-off expression
+     * normalization. Channel-restricted regions use this for lochan/hichan,
+     * source-scoped Note Off and articulation state. Omni regions continue
+     * to use channel, preserving the legacy collapsed behavior.
+     */
+    int sourceChannel { 0 };
 };
 
 }

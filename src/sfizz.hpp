@@ -704,12 +704,12 @@ public:
     // using the existing single-channel overloads; they are equivalent to
     // calling the channel-taking overload with channel = 0 (master).
     //
-    // setMPEEnabled() gates channel routing engine-wide: with MPE disabled,
-    // the channel-taking overloads collapse channel to 0 internally so both
-    // API surfaces behave identically (single-channel, pre-MPE semantics).
-    // With MPE enabled, the channel argument is honoured end-to-end and
-    // the MPE 1.0 spec-compliance filters (Manager-only CCs, member-channel
-    // Poly KP) apply.
+    // The original channel is always retained as the source channel for SFZ
+    // lochan/hichan eligibility and source-scoped conditions on restricted
+    // regions. With MPE disabled, only expression routing collapses to channel
+    // 0, preserving legacy modulation and omni-region ownership. With MPE
+    // enabled, source and expression channels are identical and the MPE 1.0
+    // compliance filters (Manager-only CCs, member-channel Poly KP) apply.
 
     /** @brief Send a note on event on a specific MIDI channel (0..15). */
     void noteOn(int delay, int channel, int noteNumber, int velocity) noexcept;
@@ -736,7 +736,11 @@ public:
     /** @brief High-precision polyphonic aftertouch on a specific MIDI channel. */
     void hdPolyAftertouch(int delay, int channel, int noteNumber, float normAftertouch) noexcept;
 
-    /** @brief Enable or disable MPE mode (gates same-channel voice stealing). */
+    /**
+     * @brief Enable or disable MPE expression mode. Source-channel SFZ routing
+     * remains active in both modes; MPE enables per-channel expression,
+     * compliance filters, bend handling and channel-aware voice stealing.
+     */
     void setMPEEnabled(bool enabled) noexcept;
     /** @brief Get the current MPE mode flag. */
     bool getMPEEnabled() const noexcept;

@@ -12,6 +12,7 @@
 #include <absl/strings/string_view.h>
 #include <utility>
 #include <string>
+#include <array>
 #include <vector>
 #include <bitset>
 #include <memory>
@@ -54,7 +55,8 @@ public:
      * @return true
      * @return false
      */
-    bool isSwitchedOn() const noexcept;
+    bool isSwitchedOn(int sourceChannel = 0) const noexcept;
+    bool isSourceChannelEligible(int sourceChannel) const noexcept;
     /**
      * @brief Register a new note on event. The region may be switched on or off using keys so
      * this function updates the keyswitches state.
@@ -66,7 +68,7 @@ public:
      * @return true if the region should trigger on this event.
      * @return false
      */
-    bool registerNoteOn(int noteNumber, float velocity, float randValue) noexcept;
+    bool registerNoteOn(int noteNumber, float velocity, float randValue, int sourceChannel = 0) noexcept;
     /**
      * @brief Register a new note off event. The region may be switched on or off using keys so
      * this function updates the keyswitches state.
@@ -78,7 +80,8 @@ public:
      * @return true if the region should trigger on this event.
      * @return false
      */
-    bool registerNoteOff(int noteNumber, float velocity, float randValue) noexcept;
+    bool registerNoteOff(int noteNumber, float velocity, float randValue,
+        int sourceChannel = 0, int expressionChannel = 0) noexcept;
     /**
      * @brief Update the internal state of the layer with respect to CC events (sustain, CC
      *  switch, etc).
@@ -87,7 +90,8 @@ public:
      * @param ccValue
      * @return false
      */
-    void updateCCState(int ccNumber, float ccValue) noexcept;
+    void updateCCState(int ccNumber, float ccValue, int sourceChannel = 0,
+        int expressionChannel = 0) noexcept;
     /**
      * @brief Register a new CC event,. This method updates the internal CC state with respect
      * to CC events (sustain, CC switch, etc) and checks if the region should trigger on this
@@ -100,19 +104,21 @@ public:
      * @return true if the region should trigger on this event
      * @return false otherwise
      */
-    bool registerCC(int ccNumber, float ccValue, float randValue, int extendedArg=-1) noexcept;
+    bool registerCC(int ccNumber, float ccValue, float randValue,
+        int extendedArg = -1, int sourceChannel = 0,
+        int expressionChannel = 0) noexcept;
     /**
      * @brief Register a new pitch wheel event.
      *
      * @param pitch
      */
-    void registerPitchWheel(float pitch) noexcept;
+    void registerPitchWheel(float pitch, int sourceChannel = 0) noexcept;
     /**
      * @brief Register a new aftertouch event.
      *
      * @param aftertouch
      */
-    void registerAftertouch(float aftertouch) noexcept;
+    void registerAftertouch(float aftertouch, int sourceChannel = 0) noexcept;
     /**
      * @brief Register tempo
      *
@@ -126,17 +132,51 @@ public:
      */
     void registerProgramChange(int program) noexcept;
 
-    // Started notes
+    void setKeySwitched(int sourceChannel, bool value) noexcept;
+    void setPreviousKeySwitched(int sourceChannel, bool value) noexcept;
+    bool isCcSwitchedOn(int sourceChannel) const noexcept;
+
+    struct DelayedRelease {
+        int noteNumber;
+        float velocity;
+        int sourceChannel;
+        int expressionChannel;
+    };
+
+    struct SourceActivationState {
+        bool keySwitched { false };
+        bool previousKeySwitched { false };
+        bool sequenceSwitched { false };
+        bool pitchSwitched { true };
+        bool aftertouchSwitched { true };
+        bool sustainPressed { false };
+        bool sostenutoPressed { false };
+        std::bitset<config::numCCs> ccSwitched;
+        int sequenceCounter { 0 };
+    };
+
+    // Started notes. The legacy fields remain the storage for omni regions;
+    // sourceStates_/sourceDelayed* are used only by effective lochan/hichan
+    // restrictions, preserving ordinary SFZ behavior and memory cost.
     bool sustainPressed_ { false };
     bool sostenutoPressed_ { false };
     std::vector<std::pair<int, float>> delayedSustainReleases_;
     std::vector<std::pair<int, float>> delayedSostenutoReleases_;
-    void delaySustainRelease(int noteNumber, float velocity) noexcept;
-    void delaySostenutoRelease(int noteNumber, float velocity) noexcept;
-    void storeSostenutoNotes() noexcept;
-    void removeFromSostenutoReleases(int noteNumber) noexcept;
-    bool isNoteSustained(int noteNumber) const noexcept;
-    bool isNoteSostenutoed(int noteNumber) const noexcept;
+    std::unique_ptr<std::array<SourceActivationState, 16>> sourceStates_;
+    std::vector<DelayedRelease> sourceDelayedSustainReleases_;
+    std::vector<DelayedRelease> sourceDelayedSostenutoReleases_;
+
+    void reserveDelayedReleaseCapacity(size_t capacity);
+    void delaySustainRelease(int noteNumber, float velocity,
+        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+    void delaySostenutoRelease(int noteNumber, float velocity,
+        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+    void storeSostenutoNotes(int sourceChannel = 0, int expressionChannel = 0) noexcept;
+    void removeFromSostenutoReleases(int noteNumber, int sourceChannel = 0) noexcept;
+    bool isNoteSustained(int noteNumber, int sourceChannel = 0) const noexcept;
+    bool isNoteSostenutoed(int noteNumber, int sourceChannel = 0) const noexcept;
+    bool isSustainPressed(int sourceChannel = 0) const noexcept;
+    bool isSostenutoPressed(int sourceChannel = 0) const noexcept;
 
     const MidiState& midiState_;
     bool keySwitched_ {};

@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- SFZ `lochan` / `hichan` region routing across MIDI channels 1–16.
+- Source-channel isolation for channel-restricted CC conditions, keyswitches,
+  sequences, note ownership, release triggers, pedals, bend and aftertouch.
+
+### Changed
+
+- MPE-off input now retains the original source channel for SFZ eligibility
+  while continuing to collapse expression routing to channel 0. MPE Full still
+  honors channel ranges without bypassing Manager-only message filters.
+- `loprog` / `hiprog` remain global and unchanged.
+
 ## [1.1.0] - 2026-08-26
 
 Forked from sfizz (1.2.3 development series).

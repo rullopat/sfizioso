@@ -7,6 +7,7 @@
 #include "MidiState.h"
 #include "utility/Macros.h"
 #include "utility/Debug.h"
+#include <limits>
 
 sfz::MidiState::MidiState()
 {
@@ -65,10 +66,129 @@ void sfz::MidiState::noteOffEvent(int delay, int noteNumber, float velocity) noe
 
 }
 
+void sfz::MidiState::sourceNoteOnEvent(int channel, int noteNumber, float velocity) noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return;
+    if (noteNumber < 0 || noteNumber >= 128)
+        return;
+
+    SourceNoteState& state = sourceNoteStates[channel];
+    if (state.lastNotePlayed >= 0)
+        state.velocityOverride = state.velocities[state.lastNotePlayed];
+    state.velocities[noteNumber] = velocity;
+    state.lastNotePlayed = noteNumber;
+    if (state.noteCounts[noteNumber] < std::numeric_limits<uint16_t>::max()) {
+        ++state.noteCounts[noteNumber];
+        ++state.activeNotes;
+    }
+    state.pressed.set(noteNumber);
+}
+
+void sfz::MidiState::sourceNoteOffEvent(int channel, int noteNumber) noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return;
+    if (noteNumber < 0 || noteNumber >= 128)
+        return;
+
+    SourceNoteState& state = sourceNoteStates[channel];
+    if (state.noteCounts[noteNumber] > 0) {
+        --state.noteCounts[noteNumber];
+        if (state.noteCounts[noteNumber] == 0)
+            state.pressed.reset(noteNumber);
+        if (state.activeNotes > 0)
+            --state.activeNotes;
+    }
+}
+
+int sfz::MidiState::getSourceActiveNotes(int channel) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return 0;
+    return sourceNoteStates[channel].activeNotes;
+}
+
+float sfz::MidiState::getSourceNoteVelocity(int channel, int noteNumber) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return 0.0f;
+    if (noteNumber < 0 || noteNumber >= 128)
+        return 0.0f;
+    return sourceNoteStates[channel].velocities[noteNumber];
+}
+
+float sfz::MidiState::getSourceVelocityOverride(int channel) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return 0.0f;
+    return sourceNoteStates[channel].velocityOverride;
+}
+
+bool sfz::MidiState::isSourceNotePressed(int channel, int noteNumber) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return false;
+    if (noteNumber < 0 || noteNumber >= 128)
+        return false;
+    return sourceNoteStates[channel].pressed.test(noteNumber);
+}
+
+void sfz::MidiState::sourcePolyAftertouchEvent(int channel, int noteNumber, float aftertouch) noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return;
+    if (noteNumber < 0 || noteNumber >= 128)
+        return;
+    sourceNoteStates[channel].polyAftertouch[noteNumber] = aftertouch;
+}
+
+float sfz::MidiState::getSourcePolyAftertouch(int channel, int noteNumber) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceNoteStates.size()))
+        return 0.0f;
+    if (noteNumber < 0 || noteNumber >= 128)
+        return 0.0f;
+    return sourceNoteStates[channel].polyAftertouch[noteNumber];
+}
+
+void sfz::MidiState::sourcePitchBendEvent(int channel, float pitch) noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourcePitchBends.size()))
+        return;
+    sourcePitchBends[channel] = pitch;
+}
+
+float sfz::MidiState::getSourcePitchBend(int channel) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourcePitchBends.size()))
+        return 0.0f;
+    return sourcePitchBends[channel];
+}
+
+void sfz::MidiState::sourceChannelAftertouchEvent(int channel, float aftertouch) noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceChannelAftertouch.size()))
+        return;
+    sourceChannelAftertouch[channel] = aftertouch;
+}
+
+float sfz::MidiState::getSourceChannelAftertouch(int channel) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceChannelAftertouch.size()))
+        return 0.0f;
+    return sourceChannelAftertouch[channel];
+}
+
 void sfz::MidiState::allNotesOff(int delay) noexcept
 {
     for (int note = 0; note < 128; note++)
         noteOffEvent(delay, note, 0.0f);
+    for (SourceNoteState& state : sourceNoteStates) {
+        state.pressed.reset();
+        state.noteCounts.fill(0);
+        state.activeNotes = 0;
+    }
 }
 
 void sfz::MidiState::setSampleRate(float sampleRate) noexcept
@@ -291,6 +411,30 @@ void sfz::MidiState::ccEvent(int delay, int channel, int ccNumber, float ccValue
     insertEventInVector(channelStates[channel].ccEvents[ccNumber], delay, ccValue);
 }
 
+void sfz::MidiState::sourceCCEvent(int channel, int ccNumber, float ccValue) noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceCCValues.size()))
+        return;
+    if (ccNumber < 0 || ccNumber >= config::numCCs)
+        return;
+    sourceCCValues[channel][ccNumber] = ccValue;
+}
+
+float sfz::MidiState::getSourceCCValue(int channel, int ccNumber) const noexcept
+{
+    if (channel < 0 || channel >= static_cast<int>(sourceCCValues.size()))
+        return 0.0f;
+    if (ccNumber < 0 || ccNumber >= config::numCCs)
+        return 0.0f;
+    return sourceCCValues[channel][ccNumber];
+}
+
+void sfz::MidiState::resetSourceCCStates() noexcept
+{
+    for (auto& values : sourceCCValues)
+        values.fill(0.0f);
+}
+
 float sfz::MidiState::getCCValue(int ccNumber) const noexcept
 {
     return getCCValue(masterChannel, ccNumber);
@@ -361,6 +505,16 @@ void sfz::MidiState::resetNoteStates() noexcept
     noteStates.reset();
     absl::c_fill(noteOnTimes, 0);
     absl::c_fill(noteOffTimes, 0);
+
+    for (SourceNoteState& state : sourceNoteStates) {
+        state.pressed.reset();
+        state.noteCounts.fill(0);
+        state.velocities.fill(0.0f);
+        state.polyAftertouch.fill(0.0f);
+        state.activeNotes = 0;
+        state.lastNotePlayed = -1;
+        state.velocityOverride = 0.0f;
+    }
 }
 
 const sfz::EventVector& sfz::MidiState::getPitchEventsRaw(int channel) const noexcept
@@ -391,6 +545,10 @@ float sfz::MidiState::getMPEBendRangeForChannel(int channel) const noexcept
 
 void sfz::MidiState::resetEventStates() noexcept
 {
+    resetSourceCCStates();
+    sourcePitchBends.fill(0.0f);
+    sourceChannelAftertouch.fill(0.0f);
+
     auto clearEvents = [] (EventVector& events) {
         events.clear();
         events.push_back({ 0, 0.0f });

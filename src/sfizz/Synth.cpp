@@ -263,8 +263,7 @@ void Synth::Impl::buildRegion(const std::vector<Opcode>& regionOpcodes)
     if (lastRegion->trigger == Trigger::release) {
         const auto keyLength = static_cast<unsigned>(lastRegion->keyRange.length());
         const auto size = max(config::delayedReleaseVoices, keyLength);
-        lastLayer->delayedSustainReleases_.reserve(size);
-        lastLayer->delayedSostenutoReleases_.reserve(size);
+        lastLayer->reserveDelayedReleaseCapacity(size);
     }
 
     // Initialize status of Key switches, CC switches, etc
@@ -324,6 +323,7 @@ void Synth::Impl::clear()
     noteOffset_ = 0;
     octaveOffset_ = 0;
     currentSwitch_ = absl::nullopt;
+    sourceCurrentSwitch_.fill(absl::nullopt);
     defaultPath_ = "";
     image_ = "";
     midiState.resetNoteStates();
@@ -434,8 +434,11 @@ void Synth::Impl::handleControlOpcodes(const std::vector<Opcode>& members)
                 const auto ccNumber = member.parameters.back();
                 const auto value = member.read(Default::loCC);
                 setDefaultHdcc(ccNumber, value);
-                if (!reloading)
+                if (!reloading) {
                     resources_.getMidiState().ccEvent(0, ccNumber, value);
+                    for (int source = 0; source < 16; ++source)
+                        resources_.getMidiState().sourceCCEvent(source, ccNumber, value);
+                }
             }
             break;
         case hash("set_hdcc&"):
@@ -443,8 +446,11 @@ void Synth::Impl::handleControlOpcodes(const std::vector<Opcode>& members)
                 const auto ccNumber = member.parameters.back();
                 const auto value = member.read(Default::loNormalized);
                 setDefaultHdcc(ccNumber, value);
-                if (!reloading)
+                if (!reloading) {
                     resources_.getMidiState().ccEvent(0, ccNumber, value);
+                    for (int source = 0; source < 16; ++source)
+                        resources_.getMidiState().sourceCCEvent(source, ccNumber, value);
+                }
             }
             break;
         case hash("label_cc&"):
@@ -730,6 +736,7 @@ void Synth::setSampleReader(SampleReader* reader) noexcept
 void Synth::Impl::setCurrentSwitch(uint8_t noteValue)
 {
     currentSwitch_ = noteValue + 12 * octaveOffset_ + noteOffset_;
+    sourceCurrentSwitch_.fill(currentSwitch_);
 }
 
 void Synth::Impl::finalizeSfzLoad()
@@ -852,8 +859,12 @@ void Synth::Impl::finalizeSfzLoad()
         }
 
         if (region.lastKeyswitch) {
-            if (currentSwitch_)
-                layer.keySwitched_ = (*currentSwitch_ == *region.lastKeyswitch);
+            if (currentSwitch_) {
+                const bool selected = (*currentSwitch_ == *region.lastKeyswitch);
+                layer.keySwitched_ = selected;
+                for (int channel = 0; channel < 16; ++channel)
+                    layer.setKeySwitched(channel, selected);
+            }
 
             if (region.keyswitchLabel)
                 setKeyswitchLabel(*region.lastKeyswitch, *region.keyswitchLabel);
@@ -861,8 +872,12 @@ void Synth::Impl::finalizeSfzLoad()
 
         if (region.lastKeyswitchRange) {
             auto& range = *region.lastKeyswitchRange;
-            if (currentSwitch_)
-                layer.keySwitched_ = range.containsWithEnd(*currentSwitch_);
+            if (currentSwitch_) {
+                const bool selected = range.containsWithEnd(*currentSwitch_);
+                layer.keySwitched_ = selected;
+                for (int channel = 0; channel < 16; ++channel)
+                    layer.setKeySwitched(channel, selected);
+            }
 
             if (region.keyswitchLabel) {
                 for (uint8_t note = range.getStart(), end = range.getEnd(); note <= end; note++)
@@ -886,7 +901,16 @@ void Synth::Impl::finalizeSfzLoad()
         // Defaults
         MidiState& midiState = resources_.getMidiState();
         for (int cc = 0; cc < config::numCCs; cc++) {
-            layer.updateCCState(cc, midiState.getCCValue(cc));
+            if (!region.isChannelRestricted()) {
+                layer.updateCCState(cc, midiState.getCCValue(cc));
+                continue;
+            }
+            for (int channel = 0; channel < 16; ++channel) {
+                const int expressionChannel = mpeEnabled_ ? channel : 0;
+                layer.updateCCState(
+                    cc, midiState.getSourceCCValue(channel, cc),
+                    channel, expressionChannel);
+            }
         }
 
 
@@ -908,8 +932,17 @@ void Synth::Impl::finalizeSfzLoad()
             region.velCurve = Curve::buildFromVelcurvePoints(
                 region.velocityPoints, Curve::Interpolator::Linear);
 
-        layer.registerPitchWheel(midiState.getPitchBend());
-        layer.registerAftertouch(midiState.getChannelAftertouch());
+        if (!region.isChannelRestricted()) {
+            layer.registerPitchWheel(midiState.getPitchBend());
+            layer.registerAftertouch(midiState.getChannelAftertouch());
+        } else {
+            for (int channel = 0; channel < 16; ++channel) {
+                layer.registerPitchWheel(
+                    midiState.getSourcePitchBend(channel), channel);
+                layer.registerAftertouch(
+                    midiState.getSourceChannelAftertouch(channel), channel);
+            }
+        }
         layer.registerTempo(static_cast<float>(resources_.getBeatClock().getBeatsPerSecond()));
         layer.registerProgramChange(midiState.getProgram());
         maxFilters = max(maxFilters, region.filters.size());
@@ -1309,20 +1342,29 @@ void Synth::hdNoteOn(int delay, int channel, int noteNumber, float normalizedVel
     ASSERT(noteNumber < 128);
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
-    // When MPE is disabled, collapse all incoming channels to the Manager
-    // Channel so the legacy and *MPE API surfaces behave identically — all
-    // events land in MidiState channel-0 storage and voices get
-    // triggerChannel_=0. The legacy non-MPE API already passes channel=0
-    // here, so this only affects callers that reached the *MPE entry directly
-    // with a non-zero channel while MPE was off.
+    const int sourceChannel = channel;
+    // MPE-off normalization applies only to expression. The original source
+    // channel continues through dispatch so lochan/hichan regions can select
+    // and own notes without changing legacy modulation behavior.
     if (!impl.mpeEnabled_)
         channel = 0;
     ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
 
-    if (impl.lastKeyswitchLists_[noteNumber].empty())
-        impl.resources_.getMidiState().noteOnEvent(delay, noteNumber, normalizedVelocity);
+    MidiState& midiState = impl.resources_.getMidiState();
+    const auto& lastSwitchLayers = impl.lastKeyswitchLists_[noteNumber];
+    if (lastSwitchLayers.empty())
+        midiState.noteOnEvent(delay, noteNumber, normalizedVelocity);
 
-    impl.noteOnDispatch(delay, channel, noteNumber, normalizedVelocity);
+    const bool isSourceKeyswitch = absl::c_any_of(
+        lastSwitchLayers, [=](const Layer* layer) {
+            const Region& region = layer->getRegion();
+            return !region.isChannelRestricted()
+                || layer->isSourceChannelEligible(sourceChannel);
+        });
+    if (!isSourceKeyswitch)
+        midiState.sourceNoteOnEvent(sourceChannel, noteNumber, normalizedVelocity);
+
+    impl.noteOnDispatch(delay, sourceChannel, channel, noteNumber, normalizedVelocity);
 }
 
 void Synth::noteOff(int delay, int noteNumber, int velocity) noexcept
@@ -1347,24 +1389,36 @@ void Synth::hdNoteOff(int delay, int channel, int noteNumber, float normalizedVe
     ASSERT(noteNumber < 128);
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
+    const int sourceChannel = channel;
     if (!impl.mpeEnabled_)
         channel = 0;
     ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
 
     // FIXME: Some keyboards (e.g. Casio PX5S) can send a real note-off velocity. In this case, do we have a
     // way in sfz to specify that a release trigger should NOT use the note-on velocity?
-    // auto replacedVelocity = (velocity == 0 ? getNoteVelocity(noteNumber) : velocity);
     MidiState& midiState = impl.resources_.getMidiState();
 
-    if (impl.lastKeyswitchLists_[noteNumber].empty())
+    const auto& lastSwitchLayers = impl.lastKeyswitchLists_[noteNumber];
+    if (lastSwitchLayers.empty())
         midiState.noteOffEvent(delay, noteNumber, normalizedVelocity);
 
-    const auto replacedVelocity = midiState.getNoteVelocity(noteNumber);
+    const bool isSourceKeyswitch = absl::c_any_of(
+        lastSwitchLayers, [=](const Layer* layer) {
+            const Region& region = layer->getRegion();
+            return !region.isChannelRestricted()
+                || layer->isSourceChannelEligible(sourceChannel);
+        });
+    if (!isSourceKeyswitch)
+        midiState.sourceNoteOffEvent(sourceChannel, noteNumber);
+
+    const float globalVelocity = midiState.getNoteVelocity(noteNumber);
+    const float sourceVelocity = midiState.getSourceNoteVelocity(sourceChannel, noteNumber);
 
     for (auto& voice : impl.voiceManager_)
-        voice.registerNoteOff(delay, channel, noteNumber, replacedVelocity);
+        voice.registerNoteOff(delay, channel, sourceChannel, noteNumber, globalVelocity);
 
-    impl.noteOffDispatch(delay, channel, noteNumber, replacedVelocity);
+    impl.noteOffDispatch(delay, sourceChannel, channel, noteNumber,
+        globalVelocity, sourceVelocity);
 }
 
 void Synth::Impl::startVoice(Layer* layer, int delay, const TriggerEvent& triggerEvent, SisterVoiceRingBuilder& ring) noexcept
@@ -1385,42 +1439,54 @@ void Synth::Impl::startVoice(Layer* layer, int delay, const TriggerEvent& trigge
         ring.addVoiceToRing(selectedVoice);
 }
 
-void Synth::Impl::checkOffGroups(const Region* region, int delay, int number, bool chokedByCC)
+void Synth::Impl::checkOffGroups(const Region* region, int delay, int number,
+    int sourceChannel, bool chokedByCC)
 {
     for (auto& voice : voiceManager_) {
-        if (voice.checkOffGroup(region, delay, number)) {
+        if (voice.checkOffGroup(region, delay, number, sourceChannel)) {
             const TriggerEvent& event = voice.getTriggerEvent();
-            if (event.type == TriggerEventType::NoteOn && !chokedByCC)
-                noteOffDispatch(delay, event.channel, event.number, event.value);
+            if (event.type == TriggerEventType::NoteOn && !chokedByCC) {
+                noteOffDispatch(delay, event.sourceChannel, event.channel,
+                    event.number, event.value, event.value);
+            }
         }
     }
 }
 
-void Synth::Impl::noteOffDispatch(int delay, int channel, int noteNumber, float velocity) noexcept
+void Synth::Impl::noteOffDispatch(int delay, int sourceChannel, int expressionChannel,
+    int noteNumber, float globalVelocity,
+    float sourceVelocity) noexcept
 {
     const auto randValue = randNoteDistribution_(Random::randomGenerator);
     SisterVoiceRingBuilder ring;
-    const TriggerEvent triggerEvent { TriggerEventType::NoteOff, noteNumber, velocity, channel };
 
     for (Layer* layer : upKeyswitchLists_[noteNumber])
-        layer->keySwitched_ = true;
+        layer->setKeySwitched(sourceChannel, true);
 
     for (Layer* layer : downKeyswitchLists_[noteNumber])
-        layer->keySwitched_ = false;
+        layer->setKeySwitched(sourceChannel, false);
 
     for (Layer* layer : noteActivationLists_[noteNumber]) {
         const Region& region = layer->getRegion();
-        if (layer->registerNoteOff(noteNumber, velocity, randValue)) {
-            if (region.trigger == Trigger::release && !region.rtDead && !voiceManager_.playingAttackVoice(&region))
+        const float velocity = region.isChannelRestricted() ? sourceVelocity : globalVelocity;
+        if (layer->registerNoteOff(noteNumber, velocity, randValue,
+                sourceChannel, expressionChannel)) {
+            if (region.trigger == Trigger::release && !region.rtDead
+                && !voiceManager_.playingAttackVoice(&region, sourceChannel))
                 continue;
 
-            checkOffGroups(&region, delay, noteNumber);
+            checkOffGroups(&region, delay, noteNumber, sourceChannel);
+            const TriggerEvent triggerEvent {
+                TriggerEventType::NoteOff, noteNumber, velocity,
+                expressionChannel, sourceChannel
+            };
             startVoice(layer, delay, triggerEvent, ring);
         }
     }
 }
 
-void Synth::Impl::noteOnDispatch(int delay, int channel, int noteNumber, float velocity) noexcept
+void Synth::Impl::noteOnDispatch(int delay, int sourceChannel, int expressionChannel,
+    int noteNumber, float velocity) noexcept
 {
     const auto randValue = randNoteDistribution_(Random::randomGenerator);
     SisterVoiceRingBuilder ring;
@@ -1428,70 +1494,143 @@ void Synth::Impl::noteOnDispatch(int delay, int channel, int noteNumber, float v
 
     if (!lastKeyswitchLists_[noteNumber].empty()) {
         if (currentSwitch_ && *currentSwitch_ != noteNumber) {
-            for (Layer* layer : lastKeyswitchLists_[*currentSwitch_])
-                layer->keySwitched_ = false;
+            for (Layer* layer : lastKeyswitchLists_[*currentSwitch_]) {
+                if (!layer->getRegion().isChannelRestricted())
+                    layer->setKeySwitched(sourceChannel, false);
+            }
         }
         currentSwitch_ = noteNumber;
+
+        if (sourceChannel >= 0
+            && sourceChannel < static_cast<int>(sourceCurrentSwitch_.size())) {
+            auto& sourceSwitch = sourceCurrentSwitch_[sourceChannel];
+            if (sourceSwitch && *sourceSwitch != noteNumber) {
+                for (Layer* layer : lastKeyswitchLists_[*sourceSwitch]) {
+                    if (layer->getRegion().isChannelRestricted())
+                        layer->setKeySwitched(sourceChannel, false);
+                }
+            }
+            sourceSwitch = noteNumber;
+        }
     }
 
     for (Layer* layer : lastKeyswitchLists_[noteNumber])
-        layer->keySwitched_ = true;
+        layer->setKeySwitched(sourceChannel, true);
 
     for (Layer* layer : upKeyswitchLists_[noteNumber])
-        layer->keySwitched_ = false;
+        layer->setKeySwitched(sourceChannel, false);
 
     for (Layer* layer : downKeyswitchLists_[noteNumber])
-        layer->keySwitched_ = true;
+        layer->setKeySwitched(sourceChannel, true);
 
     for (Layer* layer : noteActivationLists_[noteNumber]) {
-        if (layer->registerNoteOn(noteNumber, velocity, randValue)) {
+        if (layer->registerNoteOn(noteNumber, velocity, randValue, sourceChannel)) {
             const Region& region = layer->getRegion();
-            if (region.useTimerRange && !voiceManager_.withinValidTimerRange(&region, midiState.getInternalClock() + delay, sampleRate_))
+            if (region.useTimerRange
+                && !voiceManager_.withinValidTimerRange(
+                    &region, midiState.getInternalClock() + delay, sampleRate_))
                 continue;
 
-            checkOffGroups(&region, delay, noteNumber);
-            TriggerEvent triggerEvent { TriggerEventType::NoteOn, noteNumber, velocity, channel };
+            checkOffGroups(&region, delay, noteNumber, sourceChannel);
+            const TriggerEvent triggerEvent {
+                TriggerEventType::NoteOn, noteNumber, velocity,
+                expressionChannel, sourceChannel
+            };
             startVoice(layer, delay, triggerEvent, ring);
         }
     }
 
     for (Layer* layer : previousKeyswitchLists_) {
         const Region& region = layer->getRegion();
-        layer->previousKeySwitched_ = (region.previousKeyswitch == noteNumber);
+        layer->setPreviousKeySwitched(
+            sourceChannel, region.previousKeyswitch == noteNumber);
     }
 }
 
-void Synth::Impl::startDelayedSustainReleases(Layer* layer, int delay, SisterVoiceRingBuilder& ring) noexcept
+void Synth::Impl::startDelayedSustainReleases(Layer* layer, int delay,
+    int sourceChannel, bool sourceScoped,
+    SisterVoiceRingBuilder& ring) noexcept
 {
     const Region& region = layer->getRegion();
 
-    if (!region.rtDead && !voiceManager_.playingAttackVoice(&region)) {
+    if (!region.isChannelRestricted()) {
+        if (!region.rtDead && !voiceManager_.playingAttackVoice(&region)) {
+            layer->delayedSustainReleases_.clear();
+            return;
+        }
+
+        for (auto& note : layer->delayedSustainReleases_) {
+            const TriggerEvent event {
+                TriggerEventType::NoteOff, note.first, note.second, 0, 0
+            };
+            startVoice(layer, delay, event, ring);
+        }
         layer->delayedSustainReleases_.clear();
         return;
     }
 
-    for (auto& note: layer->delayedSustainReleases_) {
-        const TriggerEvent noteOffEvent { TriggerEventType::NoteOff, note.first, note.second };
-        startVoice(layer, delay, noteOffEvent, ring);
-    }
+    auto& releases = layer->sourceDelayedSustainReleases_;
+    for (size_t i = 0; i < releases.size();) {
+        const Layer::DelayedRelease release = releases[i];
+        if (sourceScoped && release.sourceChannel != sourceChannel) {
+            ++i;
+            continue;
+        }
 
-    layer->delayedSustainReleases_.clear();
+        if (region.rtDead
+            || voiceManager_.playingAttackVoice(&region, release.sourceChannel)) {
+            const TriggerEvent event {
+                TriggerEventType::NoteOff, release.noteNumber, release.velocity,
+                release.expressionChannel, release.sourceChannel
+            };
+            startVoice(layer, delay, event, ring);
+        }
+        releases[i] = releases.back();
+        releases.pop_back();
+    }
 }
 
-void Synth::Impl::startDelayedSostenutoReleases(Layer* layer, int delay, SisterVoiceRingBuilder& ring) noexcept
+void Synth::Impl::startDelayedSostenutoReleases(Layer* layer, int delay,
+    int sourceChannel, bool sourceScoped,
+    SisterVoiceRingBuilder& ring) noexcept
 {
     const Region& region = layer->getRegion();
 
-    if (!region.rtDead && !voiceManager_.playingAttackVoice(&region)) {
+    if (!region.isChannelRestricted()) {
+        if (!region.rtDead && !voiceManager_.playingAttackVoice(&region)) {
+            layer->delayedSostenutoReleases_.clear();
+            return;
+        }
+
+        for (auto& note : layer->delayedSostenutoReleases_) {
+            const TriggerEvent event {
+                TriggerEventType::NoteOff, note.first, note.second, 0, 0
+            };
+            startVoice(layer, delay, event, ring);
+        }
         layer->delayedSostenutoReleases_.clear();
         return;
     }
 
-    for (auto& note: layer->delayedSostenutoReleases_) {
-        const TriggerEvent noteOffEvent { TriggerEventType::NoteOff, note.first, note.second };
-        startVoice(layer, delay, noteOffEvent, ring);
+    auto& releases = layer->sourceDelayedSostenutoReleases_;
+    for (size_t i = 0; i < releases.size();) {
+        const Layer::DelayedRelease release = releases[i];
+        if (sourceScoped && release.sourceChannel != sourceChannel) {
+            ++i;
+            continue;
+        }
+
+        if (region.rtDead
+            || voiceManager_.playingAttackVoice(&region, release.sourceChannel)) {
+            const TriggerEvent event {
+                TriggerEventType::NoteOff, release.noteNumber, release.velocity,
+                release.expressionChannel, release.sourceChannel
+            };
+            startVoice(layer, delay, event, ring);
+        }
+        releases[i] = releases.back();
+        releases.pop_back();
     }
-    layer->delayedSostenutoReleases_.clear();
 }
 
 void Synth::cc(int delay, int ccNumber, int ccValue) noexcept
@@ -1500,34 +1639,92 @@ void Synth::cc(int delay, int ccNumber, int ccValue) noexcept
     hdcc(delay, ccNumber, normalizedCC);
 }
 
-void Synth::Impl::ccDispatch(int delay, int channel, int ccNumber, float value, int extendedArg) noexcept
+void Synth::Impl::ccDispatch(int delay, int sourceChannel, int expressionChannel,
+    int ccNumber, float value, bool sourceScoped,
+    int extendedArg) noexcept
 {
     SisterVoiceRingBuilder ring;
-    TriggerEvent triggerEvent { TriggerEventType::CC, ccNumber, value, channel };
+    const TriggerEvent triggerEvent {
+        TriggerEventType::CC, ccNumber, value, expressionChannel, sourceChannel
+    };
     const auto randValue = randNoteDistribution_(Random::randomGenerator);
     MidiState& midiState = resources_.getMidiState();
     for (Layer* layer : ccActivationLists_[ccNumber]) {
         const Region& region = layer->getRegion();
 
-        if (region.checkSustain && ccNumber == region.sustainCC && value < region.sustainThreshold)
-            startDelayedSustainReleases(layer, delay, ring);
+        if (region.checkSustain && ccNumber == region.sustainCC
+            && value < region.sustainThreshold) {
+            startDelayedSustainReleases(
+                layer, delay, sourceChannel, sourceScoped, ring);
+        }
 
-        if (region.checkSostenuto && ccNumber == region.sostenutoCC && value < region.sostenutoThreshold) {
-            if (layer->sustainPressed_) {
-                for (const auto& v: layer->delayedSostenutoReleases_)
-                    layer->delaySustainRelease(v.first, v.second);
-
+        if (region.checkSostenuto && ccNumber == region.sostenutoCC
+            && value < region.sostenutoThreshold) {
+            if (!region.isChannelRestricted() && layer->sustainPressed_) {
+                for (const auto& note : layer->delayedSostenutoReleases_)
+                    layer->delaySustainRelease(note.first, note.second);
                 layer->delayedSostenutoReleases_.clear();
+            } else if (!region.isChannelRestricted()) {
+                startDelayedSostenutoReleases(
+                    layer, delay, sourceChannel, sourceScoped, ring);
             } else {
-                startDelayedSostenutoReleases(layer, delay, ring);
+                for (int source = 0; source < 16; ++source) {
+                    if (sourceScoped && source != sourceChannel)
+                        continue;
+                    if (!layer->isSourceChannelEligible(source))
+                        continue;
+                    if (!layer->isSustainPressed(source)) {
+                        startDelayedSostenutoReleases(
+                            layer, delay, source, true, ring);
+                        continue;
+                    }
+
+                    auto& releases = layer->sourceDelayedSostenutoReleases_;
+                    for (size_t i = 0; i < releases.size();) {
+                        const Layer::DelayedRelease release = releases[i];
+                        if (release.sourceChannel != source) {
+                            ++i;
+                            continue;
+                        }
+                        layer->delaySustainRelease(
+                            release.noteNumber, release.velocity,
+                            release.sourceChannel, release.expressionChannel);
+                        releases[i] = releases.back();
+                        releases.pop_back();
+                    }
+                }
             }
         }
 
-        if (layer->registerCC(ccNumber, value, randValue, extendedArg)) {
-            if (region.useTimerRange && ! voiceManager_.withinValidTimerRange(&region, midiState.getInternalClock() + delay, sampleRate_))
+        bool shouldTrigger = false;
+        if (sourceScoped || !region.isChannelRestricted()) {
+            shouldTrigger = layer->registerCC(
+                ccNumber, value, randValue, extendedArg,
+                sourceChannel, expressionChannel);
+        } else {
+            // Host automation and MPE Manager-only controls are zone-wide.
+            // Update every eligible source state but emit at most one CC
+            // trigger, preserving the legacy one-event/one-layer behavior.
+            for (int source = 0; source < 16; ++source) {
+                if (!layer->isSourceChannelEligible(source))
+                    continue;
+                const int sourceExpression = mpeEnabled_ ? source : expressionChannel;
+                layer->updateCCState(ccNumber, value, source, sourceExpression);
+            }
+            if (layer->isSourceChannelEligible(sourceChannel)) {
+                shouldTrigger = layer->registerCC(
+                    ccNumber, value, randValue, extendedArg,
+                    sourceChannel, expressionChannel);
+            }
+        }
+
+        if (shouldTrigger) {
+            if (region.useTimerRange
+                && !voiceManager_.withinValidTimerRange(
+                    &region, midiState.getInternalClock() + delay, sampleRate_))
                 continue;
 
-            checkOffGroups(&region, delay, ccNumber, true);
+            checkOffGroups(&region, delay, ccNumber, sourceChannel, true);
             startVoice(layer, delay, triggerEvent, ring);
         }
     }
@@ -1560,6 +1757,8 @@ void Synth::Impl::performHdcc(int delay, int channel, int ccNumber, float normVa
 {
     ASSERT(ccNumber < config::numCCs);
     ASSERT(ccNumber >= 0);
+    const int sourceChannel = channel;
+    const bool managerOnly = isManagerOnlyCC(ccNumber);
 
     // MPE 1.0 §2.3.1 / §2.3.3: zone-wide messages (pedal CCs, mode/reset,
     // Bank Select) must only be honoured on the Manager Channel. Drop on
@@ -1570,7 +1769,7 @@ void Synth::Impl::performHdcc(int delay, int channel, int ccNumber, float normVa
     // filter separately. Gate on asMidi so internal automation paths
     // (which conceptually target the Manager Channel) keep working.
     // Lower Zone only (Manager = channel 0); revisit when Upper Zone lands.
-    if (asMidi && mpeEnabled_ && channel != 0 && isManagerOnlyCC(ccNumber)) {
+    if (asMidi && mpeEnabled_ && channel != 0 && managerOnly) {
         ++droppedManagerOnlyCCs_;
         return;
     }
@@ -1607,11 +1806,19 @@ void Synth::Impl::performHdcc(int delay, int channel, int ccNumber, float normVa
     if (!mpeEnabled_)
         channel = 0;
 
+    const bool sourceScoped = asMidi && !(mpeEnabled_ && managerOnly);
     for (auto& voice : voiceManager_)
-        voice.registerCC(delay, ccNumber, normValue);
+        voice.registerCC(delay, sourceChannel, ccNumber, normValue, sourceScoped);
 
-    ccDispatch(delay, channel, ccNumber, normValue, extendedArg);
+    ccDispatch(delay, sourceChannel, channel, ccNumber, normValue,
+        sourceScoped, extendedArg);
     midiState.ccEvent(delay, channel, ccNumber, normValue);
+    if (sourceScoped) {
+        midiState.sourceCCEvent(sourceChannel, ccNumber, normValue);
+    } else {
+        for (int source = 0; source < 16; ++source)
+            midiState.sourceCCEvent(source, ccNumber, normValue);
+    }
 }
 
 void Synth::Impl::handleRpnControlCC(int channel, int ccNumber, float normValue) noexcept
@@ -1740,11 +1947,14 @@ void Synth::pitchWheel(int delay, int channel, int pitch) noexcept
 void Synth::hdPitchWheel(int delay, int channel, float normalizedPitch) noexcept
 {
     Impl& impl = *impl_;
+    const int sourceChannel = channel;
     if (!impl.mpeEnabled_)
         channel = 0;
 
     ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
     impl.resources_.getMidiState().pitchBendEvent(delay, channel, normalizedPitch);
+    impl.resources_.getMidiState().sourcePitchBendEvent(
+        sourceChannel, normalizedPitch);
 
     // M3b: layer- and voice-side registration of pitch bend stays
     // channel-agnostic for now. Voices read the channel-correct value
@@ -1753,7 +1963,7 @@ void Synth::hdPitchWheel(int delay, int channel, float normalizedPitch) noexcept
     // bookkeeping. A follow-up commit can filter these to voices on
     // the matching channel when MPE is enabled.
     for (const Impl::LayerPtr& layer : impl.layers_)
-        layer->registerPitchWheel(normalizedPitch);
+        layer->registerPitchWheel(normalizedPitch, sourceChannel);
 
     for (auto& voice : impl.voiceManager_)
         voice.registerPitchWheel(delay, normalizedPitch);
@@ -1790,14 +2000,17 @@ void Synth::channelAftertouch(int delay, int channel, int aftertouch) noexcept
 void Synth::hdChannelAftertouch(int delay, int channel, float normAftertouch) noexcept
 {
     Impl& impl = *impl_;
+    const int sourceChannel = channel;
     if (!impl.mpeEnabled_)
         channel = 0;
     ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
 
     impl.resources_.getMidiState().channelAftertouchEvent(delay, channel, normAftertouch);
+    impl.resources_.getMidiState().sourceChannelAftertouchEvent(
+        sourceChannel, normAftertouch);
 
     for (const Impl::LayerPtr& layerPtr : impl.layers_)
-        layerPtr->registerAftertouch(normAftertouch);
+        layerPtr->registerAftertouch(normAftertouch, sourceChannel);
 
     for (auto& voice : impl.voiceManager_)
         voice.registerAftertouch(delay, normAftertouch);
@@ -1825,6 +2038,7 @@ void Synth::polyAftertouch(int delay, int channel, int noteNumber, int aftertouc
 void Synth::hdPolyAftertouch(int delay, int channel, int noteNumber, float normAftertouch) noexcept
 {
     Impl& impl = *impl_;
+    const int sourceChannel = channel;
     if (!impl.mpeEnabled_)
         channel = 0;
 
@@ -1844,6 +2058,8 @@ void Synth::hdPolyAftertouch(int delay, int channel, int noteNumber, float normA
     ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
 
     impl.resources_.getMidiState().polyAftertouchEvent(delay, channel, noteNumber, normAftertouch);
+    impl.resources_.getMidiState().sourcePolyAftertouchEvent(
+        sourceChannel, noteNumber, normAftertouch);
 
     for (auto& voice : impl.voiceManager_)
         voice.registerPolyAftertouch(delay, noteNumber, normAftertouch);
@@ -2440,19 +2656,30 @@ void Synth::Impl::resetAllControllers(int delay) noexcept
 {
     MidiState& midiState = resources_.getMidiState();
     midiState.pitchBendEvent(delay, 0.0f);
-    for (int cc = 0; cc < config::numCCs; ++cc)
+    for (int source = 0; source < 16; ++source)
+        midiState.sourcePitchBendEvent(source, 0.0f);
+    midiState.resetSourceCCStates();
+    for (int cc = 0; cc < config::numCCs; ++cc) {
         midiState.ccEvent(delay, cc, defaultCCValues_[cc]);
+        for (int source = 0; source < 16; ++source)
+            midiState.sourceCCEvent(source, cc, defaultCCValues_[cc]);
+    }
 
     for (auto& voice : voiceManager_) {
         voice.registerPitchWheel(delay, 0);
         for (int cc = 0; cc < config::numCCs; ++cc)
-            voice.registerCC(delay, cc, defaultCCValues_[cc]);
+            voice.registerCC(delay, 0, cc, defaultCCValues_[cc], false);
     }
 
     for (const LayerPtr& layerPtr : layers_) {
         Layer& layer = *layerPtr;
-        for (int cc = 0; cc < config::numCCs; ++cc)
+        for (int cc = 0; cc < config::numCCs; ++cc) {
             layer.updateCCState(cc, defaultCCValues_[cc]);
+            if (layer.getRegion().isChannelRestricted()) {
+                for (int source = 1; source < 16; ++source)
+                    layer.updateCCState(cc, defaultCCValues_[cc], source, 0);
+            }
+        }
     }
 }
 

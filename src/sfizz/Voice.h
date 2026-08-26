@@ -142,7 +142,8 @@ public:
      * @param noteNumber
      * @param velocity
      */
-    void registerNoteOff(int delay, int channel, int noteNumber, float velocity) noexcept;
+    void registerNoteOff(int delay, int expressionChannel, int sourceChannel,
+        int noteNumber, float velocity) noexcept;
     /**
      * @brief Register a CC event; this may trigger a release. If the voice is playing and its
      * region has CC modifiers, it will use this value to compute the CC envelope to apply to the
@@ -152,7 +153,8 @@ public:
      * @param ccNumber
      * @param ccValue
      */
-    void registerCC(int delay, int ccNumber, float ccValue) noexcept;
+    void registerCC(int delay, int sourceChannel, int ccNumber, float ccValue,
+        bool sourceScoped) noexcept;
     /**
      * @brief Register a pitch wheel event; for now this does nothing
      *
@@ -194,7 +196,8 @@ public:
      * @return true
      * @return false
      */
-    bool checkOffGroup(const Region* other, int delay, int noteNumber) noexcept;
+    bool checkOffGroup(const Region* other, int delay, int noteNumber,
+        int sourceChannel) noexcept;
 
     /**
      * @brief Render a block of data for this voice into the span
