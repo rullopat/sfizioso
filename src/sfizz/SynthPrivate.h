@@ -6,6 +6,7 @@
 #include "TriggerEvent.h"
 #include "VoiceManager.h"
 #include "Layer.h"
+#include "NoteRegistry.h"
 #include "BitArray.h"
 #include "modulations/sources/ADSREnvelope.h"
 #include "modulations/sources/Controller.h"
@@ -133,8 +134,8 @@ struct Synth::Impl final: public Parser::Listener {
      * @param noteNumber
      * @param velocity
      */
-    void noteOnDispatch(int delay, int sourceChannel, int expressionChannel,
-        int noteNumber, float velocity) noexcept;
+    void noteOnDispatch(int delay, SourceAddress source, int expressionChannel,
+        int noteNumber, float velocity, NoteInstanceId noteId) noexcept;
 
     /**
      * @brief Check all regions and start voices for note off events
@@ -146,9 +147,9 @@ struct Synth::Impl final: public Parser::Listener {
      * @param noteNumber
      * @param velocity
      */
-    void noteOffDispatch(int delay, int sourceChannel, int expressionChannel,
-        int noteNumber, float globalVelocity,
-        float sourceVelocity) noexcept;
+    void noteOffDispatch(int delay, SourceAddress source, int expressionChannel,
+        int noteNumber, float globalVelocity, float sourceVelocity,
+        NoteInstanceId noteId) noexcept;
 
     /**
      * @brief Check all regions and start voices for cc events
@@ -326,6 +327,7 @@ struct Synth::Impl final: public Parser::Listener {
     using RegionSetPtr = std::unique_ptr<RegionSet>;
     std::vector<LayerPtr> layers_;
     VoiceManager voiceManager_;
+    NoteRegistry noteRegistry_;
 
     // These are more general "groups" than sfz and encapsulates the full hierarchy
     RegionSet* currentSet_ { nullptr };

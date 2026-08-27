@@ -58,7 +58,7 @@ std::vector<int> playingSourceChannels(const sfz::Synth& synth)
 {
     std::vector<int> channels;
     for (const sfz::Voice* voice : getPlayingVoices(synth))
-        channels.push_back(voice->getTriggerEvent().sourceChannel);
+        channels.push_back(voice->getTriggerEvent().source.channel);
     std::sort(channels.begin(), channels.end());
     return channels;
 }
@@ -225,7 +225,8 @@ TEST_CASE("[Channel routing] legacy API is MIDI channel 1")
     REQUIRE(playingSamples(f.synth) == std::vector<std::string> { "*sine" });
     const auto& event = getPlayingVoices(f.synth).front()->getTriggerEvent();
     REQUIRE(event.channel == 0);
-    REQUIRE(event.sourceChannel == 0);
+    REQUIRE(event.source.group == 0);
+    REQUIRE(event.source.channel == 0);
 }
 
 TEST_CASE("[Channel routing] reversed channel range matches no source")
@@ -257,9 +258,9 @@ TEST_CASE("[Channel routing] simple ranges remain active in MPE Full")
 
     const auto voices = getPlayingVoices(f.synth);
     REQUIRE(voices[0]->getTriggerEvent().channel
-        == voices[0]->getTriggerEvent().sourceChannel);
+        == voices[0]->getTriggerEvent().source.channel);
     REQUIRE(voices[1]->getTriggerEvent().channel
-        == voices[1]->getTriggerEvent().sourceChannel);
+        == voices[1]->getTriggerEvent().source.channel);
 }
 
 TEST_CASE("[Channel routing] motivating CC32 articulations are isolated in MPE None")
@@ -554,7 +555,7 @@ TEST_CASE("[Channel routing] MPE Manager pedal releases retain member expression
     REQUIRE(countPlayingSample(f.synth, "*sine") == 2);
     for (const sfz::Voice* voice : getPlayingVoices(f.synth)) {
         REQUIRE(voice->getTriggerEvent().channel
-            == voice->getTriggerEvent().sourceChannel);
+            == voice->getTriggerEvent().source.channel);
     }
     REQUIRE(playingSourceChannels(f.synth) == std::vector<int> { 1, 2 });
 }

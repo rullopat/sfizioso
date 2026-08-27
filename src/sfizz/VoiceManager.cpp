@@ -71,7 +71,7 @@ bool VoiceManager::playingAttackVoice(const Region* releaseRegion,
     const auto compatibleVoice = [releaseRegion, sourceChannel](const Voice& v) -> bool {
         const TriggerEvent& event = v.getTriggerEvent();
         const bool sourceMatches = !releaseRegion->isChannelRestricted()
-            || sourceChannel < 0 || event.sourceChannel == sourceChannel;
+            || sourceChannel < 0 || event.source.channel == sourceChannel;
         return (
             !v.isFree()
             && event.type == TriggerEventType::NoteOn

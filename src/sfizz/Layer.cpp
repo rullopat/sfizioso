@@ -140,7 +140,7 @@ bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue, int 
 }
 
 bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue,
-    int sourceChannel, int expressionChannel) noexcept
+    int sourceChannel, int expressionChannel, NoteInstanceId noteId) noexcept
 {
     ASSERT(velocity >= 0.0f && velocity <= 1.0f);
 
@@ -182,15 +182,37 @@ bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue,
             ? midiState_.getSourceNoteVelocity(sourceChannel, noteNumber)
             : midiState_.getNoteVelocity(noteNumber);
 
+        if (sostenutoed && noteId.valid()) {
+            auto& releases = region.isChannelRestricted()
+                ? sourceDelayedSostenutoReleases_
+                : delayedSostenutoReleases_;
+            const auto it = absl::c_find_if(releases,
+                [=](const DelayedRelease& release) {
+                    return release.noteNumber == noteNumber
+                        && (!region.isChannelRestricted()
+                            || release.sourceChannel == sourceChannel)
+                        && !release.noteId.valid();
+                });
+            if (it != releases.end()) {
+                it->sourceChannel = sourceChannel;
+                it->expressionChannel = expressionChannel;
+                it->noteId = noteId;
+            }
+        }
+
         if (sostenutoed && !sostenutoPressed) {
             removeFromSostenutoReleases(noteNumber, sourceChannel);
-            if (sustainPressed)
-                delaySustainRelease(noteNumber, noteVelocity, sourceChannel, expressionChannel);
+            if (sustainPressed) {
+                delaySustainRelease(noteNumber, noteVelocity, sourceChannel,
+                    expressionChannel, noteId);
+            }
         }
 
         if (!sostenutoPressed || !sostenutoed) {
-            if (sustainPressed)
-                delaySustainRelease(noteNumber, noteVelocity, sourceChannel, expressionChannel);
+            if (sustainPressed) {
+                delaySustainRelease(noteNumber, noteVelocity, sourceChannel,
+                    expressionChannel, noteId);
+            }
             else
                 return true;
         }
@@ -371,42 +393,44 @@ void Layer::reserveDelayedReleaseCapacity(size_t capacity)
 }
 
 void Layer::delaySustainRelease(int noteNumber, float velocity,
-    int sourceChannel, int expressionChannel) noexcept
+    int sourceChannel, int expressionChannel, NoteInstanceId noteId) noexcept
 {
     if (!region_.isChannelRestricted()) {
         if (delayedSustainReleases_.size() == delayedSustainReleases_.capacity())
             return;
-        delayedSustainReleases_.emplace_back(noteNumber, velocity);
+        delayedSustainReleases_.push_back(
+            { noteNumber, velocity, sourceChannel, expressionChannel, noteId });
         return;
     }
 
     if (sourceDelayedSustainReleases_.size() == sourceDelayedSustainReleases_.capacity())
         return;
     sourceDelayedSustainReleases_.push_back(
-        { noteNumber, velocity, sourceChannel, expressionChannel });
+        { noteNumber, velocity, sourceChannel, expressionChannel, noteId });
 }
 
 void Layer::delaySostenutoRelease(int noteNumber, float velocity,
-    int sourceChannel, int expressionChannel) noexcept
+    int sourceChannel, int expressionChannel, NoteInstanceId noteId) noexcept
 {
     if (!region_.isChannelRestricted()) {
         if (delayedSostenutoReleases_.size() == delayedSostenutoReleases_.capacity())
             return;
-        delayedSostenutoReleases_.emplace_back(noteNumber, velocity);
+        delayedSostenutoReleases_.push_back(
+            { noteNumber, velocity, sourceChannel, expressionChannel, noteId });
         return;
     }
 
     if (sourceDelayedSostenutoReleases_.size() == sourceDelayedSostenutoReleases_.capacity())
         return;
     sourceDelayedSostenutoReleases_.push_back(
-        { noteNumber, velocity, sourceChannel, expressionChannel });
+        { noteNumber, velocity, sourceChannel, expressionChannel, noteId });
 }
 
 void Layer::removeFromSostenutoReleases(int noteNumber, int sourceChannel) noexcept
 {
     if (!region_.isChannelRestricted()) {
-        swapAndPopFirst(delayedSostenutoReleases_, [=](const std::pair<int, float>& p) {
-            return p.first == noteNumber;
+        swapAndPopFirst(delayedSostenutoReleases_, [=](const DelayedRelease& release) {
+            return release.noteNumber == noteNumber;
         });
         return;
     }
@@ -440,8 +464,8 @@ void Layer::storeSostenutoNotes(int sourceChannel, int expressionChannel) noexce
 bool Layer::isNoteSustained(int noteNumber, int sourceChannel) const noexcept
 {
     if (!region_.isChannelRestricted()) {
-        return absl::c_find_if(delayedSustainReleases_, [=](const std::pair<int, float>& p) {
-            return p.first == noteNumber;
+        return absl::c_find_if(delayedSustainReleases_, [=](const DelayedRelease& release) {
+            return release.noteNumber == noteNumber;
         }) != delayedSustainReleases_.end();
     }
 
@@ -453,8 +477,8 @@ bool Layer::isNoteSustained(int noteNumber, int sourceChannel) const noexcept
 bool Layer::isNoteSostenutoed(int noteNumber, int sourceChannel) const noexcept
 {
     if (!region_.isChannelRestricted()) {
-        return absl::c_find_if(delayedSostenutoReleases_, [=](const std::pair<int, float>& p) {
-            return p.first == noteNumber;
+        return absl::c_find_if(delayedSostenutoReleases_, [=](const DelayedRelease& release) {
+            return release.noteNumber == noteNumber;
         }) != delayedSostenutoReleases_.end();
     }
 

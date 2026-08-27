@@ -125,6 +125,21 @@ Omni regions evaluate the global program view. Effectively channel-restricted re
 
 Program state is routing state, not note expression, and must not be inserted into expression controller banks.
 
+## Implementation status
+
+The first M1 milestone now establishes identity without moving expression storage:
+
+- `SourceAddress` carries protocol group and channel; current MIDI 1.0 adapters emit group zero.
+- `NoteInstanceId` uses a registry index plus generation and is shared by all attack, layered, sister, direct-release and pedal-delayed release voices from one Note On.
+- `NoteRegistry` preallocates `max(256, 2 × configured polyphony)` bounded slots on the control thread. Note On/Off performs no allocation or lock; legacy repeated notes pair FIFO.
+- Note identities are cleared with SFZ reload, voice reconfiguration, All Notes/Sound Off and explicit sound reset.
+- Registry overflow is deterministic and counted; invalid IDs retain the old channel/note matching fallback rather than leaving voices stuck.
+- The identity fields are compact (`SourceAddress` 2 bytes, `NoteInstanceId` 4 bytes); `TriggerEvent` is now 24 bytes on the measured x86-64 ABI.
+
+Focused tests cover group/channel separation, FIFO pairing, generation-safe slot reuse, bounded overflow, layered voice sharing, delayed release propagation and repeated-note voice release. The complete Debug, Release and sanitizer suites remain the compatibility gate.
+
+Expression still uses the existing `MidiState::channelStates` topology at this milestone. Context and timeline migration follows separately so identity behavior can be reviewed before storage changes.
+
 ## Migration sequence
 
 1. Freeze current legacy, channel-routing and MPE behavior with regression tests and benchmark allocation/timing.

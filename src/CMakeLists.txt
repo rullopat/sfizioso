@@ -112,6 +112,8 @@ set(SFIZZ_HEADERS
     sfizz/simd/HelpersSSE.h
     sfizz/SIMDConfig.h
     sfizz/SIMDHelpers.h
+    sfizz/MidiIdentity.h
+    sfizz/NoteRegistry.h
     sfizz/SisterVoiceRing.h
     sfizz/Smoothers.h
     sfizz/Synth.h
@@ -140,6 +142,7 @@ set(SFIZZ_SOURCES
     sfizz/Voice.cpp
     sfizz/ScopedFTZ.cpp
     sfizz/MidiState.cpp
+    sfizz/NoteRegistry.cpp
     sfizz/Oversampler.cpp
     sfizz/ADSREnvelope.cpp
     sfizz/SfzFilter.cpp

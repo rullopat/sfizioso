@@ -7,6 +7,7 @@
 #pragma once
 #include "Region.h"
 #include "Config.h"
+#include "MidiIdentity.h"
 #include "utility/NumericId.h"
 #include "utility/LeakDetector.h"
 #include <absl/strings/string_view.h>
@@ -81,7 +82,8 @@ public:
      * @return false
      */
     bool registerNoteOff(int noteNumber, float velocity, float randValue,
-        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+        int sourceChannel = 0, int expressionChannel = 0,
+        NoteInstanceId noteId = {}) noexcept;
     /**
      * @brief Update the internal state of the layer with respect to CC events (sustain, CC
      *  switch, etc).
@@ -139,8 +141,18 @@ public:
     struct DelayedRelease {
         int noteNumber;
         float velocity;
-        int sourceChannel;
-        int expressionChannel;
+        int sourceChannel { 0 };
+        int expressionChannel { 0 };
+        NoteInstanceId noteId {};
+
+        bool operator==(const DelayedRelease& other) const noexcept
+        {
+            return noteNumber == other.noteNumber
+                && velocity == other.velocity
+                && sourceChannel == other.sourceChannel
+                && expressionChannel == other.expressionChannel
+                && noteId == other.noteId;
+        }
     };
 
     struct SourceActivationState {
@@ -160,17 +172,19 @@ public:
     // restrictions, preserving ordinary SFZ behavior and memory cost.
     bool sustainPressed_ { false };
     bool sostenutoPressed_ { false };
-    std::vector<std::pair<int, float>> delayedSustainReleases_;
-    std::vector<std::pair<int, float>> delayedSostenutoReleases_;
+    std::vector<DelayedRelease> delayedSustainReleases_;
+    std::vector<DelayedRelease> delayedSostenutoReleases_;
     std::unique_ptr<std::array<SourceActivationState, 16>> sourceStates_;
     std::vector<DelayedRelease> sourceDelayedSustainReleases_;
     std::vector<DelayedRelease> sourceDelayedSostenutoReleases_;
 
     void reserveDelayedReleaseCapacity(size_t capacity);
     void delaySustainRelease(int noteNumber, float velocity,
-        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+        int sourceChannel = 0, int expressionChannel = 0,
+        NoteInstanceId noteId = {}) noexcept;
     void delaySostenutoRelease(int noteNumber, float velocity,
-        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+        int sourceChannel = 0, int expressionChannel = 0,
+        NoteInstanceId noteId = {}) noexcept;
     void storeSostenutoNotes(int sourceChannel = 0, int expressionChannel = 0) noexcept;
     void removeFromSostenutoReleases(int noteNumber, int sourceChannel = 0) noexcept;
     bool isNoteSustained(int noteNumber, int sourceChannel = 0) const noexcept;

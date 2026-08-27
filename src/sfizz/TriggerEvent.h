@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "MidiIdentity.h"
+
 namespace sfz
 {
 enum class TriggerEventType { NoteOn, NoteOff, CC };
@@ -28,12 +30,18 @@ struct TriggerEvent
      */
     int channel { 0 };
     /**
-     * @brief Original MIDI source channel (0..15), before MPE-off expression
-     * normalization. Channel-restricted regions use this for lochan/hichan,
-     * source-scoped Note Off and articulation state. Omni regions continue
-     * to use channel, preserving the legacy collapsed behavior.
+     * @brief Original protocol-neutral source address, before MPE-off
+     * expression normalization. Channel-restricted regions use its channel
+     * for lochan/hichan, source-scoped Note Off and articulation state. MIDI
+     * 1.0 events use group zero.
      */
-    int sourceChannel { 0 };
+    SourceAddress source {};
+    /**
+     * @brief Logical Note On identity shared by every layered voice created
+     * from that event. CC-triggered voices and compatibility paths which do
+     * not correspond to an accepted Note On retain an invalid identity.
+     */
+    NoteInstanceId noteId {};
 };
 
 }

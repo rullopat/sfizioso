@@ -143,7 +143,7 @@ public:
      * @param velocity
      */
     void registerNoteOff(int delay, int expressionChannel, int sourceChannel,
-        int noteNumber, float velocity) noexcept;
+        int noteNumber, float velocity, NoteInstanceId noteId = {}) noexcept;
     /**
      * @brief Register a CC event; this may trigger a release. If the voice is playing and its
      * region has CC modifiers, it will use this value to compute the CC envelope to apply to the

@@ -563,7 +563,7 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
 
     if (region.checkSustain) {
         const bool sustainPressed = region.isChannelRestricted()
-            ? layer->isSustainPressed(event.sourceChannel)
+            ? layer->isSustainPressed(event.source.channel)
             : midiState.getCCValue(region.sustainCC) >= region.sustainThreshold;
         impl.sustainState_ =
             sustainPressed ? Impl::SustainState::Sustaining : Impl::SustainState::Up;
@@ -571,7 +571,7 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
 
     if (region.checkSostenuto) {
         const bool sostenutoPressed = region.isChannelRestricted()
-            ? layer->isSostenutoPressed(event.sourceChannel)
+            ? layer->isSostenutoPressed(event.source.channel)
             : midiState.getCCValue(region.sostenutoCC) >= region.sostenutoThreshold;
         impl.sostenutoState_ =
             sostenutoPressed ? Impl::SostenutoState::PreviouslyDown : Impl::SostenutoState::Up;
@@ -659,7 +659,7 @@ void Voice::Impl::off(int delay, bool fast) noexcept
 }
 
 void Voice::registerNoteOff(int delay, int expressionChannel, int sourceChannel,
-    int noteNumber, float velocity) noexcept
+    int noteNumber, float velocity, NoteInstanceId noteId) noexcept
 {
     ASSERT(velocity >= 0.0 && velocity <= 1.0);
     UNUSED(velocity);
@@ -672,12 +672,15 @@ void Voice::registerNoteOff(int delay, int expressionChannel, int sourceChannel,
         return;
 
     const bool channelMatches = impl.region_->isChannelRestricted()
-        ? impl.triggerEvent_.sourceChannel == sourceChannel
+        ? impl.triggerEvent_.source.channel == sourceChannel
         : impl.triggerEvent_.channel == expressionChannel;
+    const bool bothHaveNoteIdentity = noteId.valid()
+        && impl.triggerEvent_.noteId.valid();
+    const bool noteMatches = bothHaveNoteIdentity
+        ? impl.triggerEvent_.noteId == noteId
+        : impl.triggerEvent_.number == noteNumber && channelMatches;
 
-    if (impl.triggerEvent_.number == noteNumber
-        && channelMatches
-        && impl.triggerEvent_.type == TriggerEventType::NoteOn) {
+    if (noteMatches && impl.triggerEvent_.type == TriggerEventType::NoteOn) {
         impl.noteIsOff_ = true;
 
         if (impl.region_->loopMode == LoopMode::one_shot)
@@ -707,7 +710,7 @@ void Voice::registerCC(int delay, int sourceChannel, int ccNumber, float ccValue
         return;
 
     if (sourceScoped && region.isChannelRestricted()
-        && impl.triggerEvent_.sourceChannel != sourceChannel)
+        && impl.triggerEvent_.source.channel != sourceChannel)
         return;
 
     if (ccNumber != region.sustainCC && ccNumber != region.sostenutoCC)
@@ -1751,14 +1754,14 @@ bool Voice::checkOffGroup(const Region* other, int delay, int noteNumber,
         return false;
 
     if (region->isChannelRestricted()
-        && impl.triggerEvent_.sourceChannel != sourceChannel)
+        && impl.triggerEvent_.source.channel != sourceChannel)
         return false;
 
     if ((impl.triggerEvent_.type == TriggerEventType::NoteOn
             || impl.triggerEvent_.type == TriggerEventType::CC)
         && region->offBy && *region->offBy == other->group
         && (region->group != other->group
-            || !layer->isCcSwitchedOn(impl.triggerEvent_.sourceChannel)
+            || !layer->isCcSwitchedOn(impl.triggerEvent_.source.channel)
             || noteNumber != impl.triggerEvent_.number)) {
         off(delay);
         return true;

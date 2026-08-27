@@ -300,6 +300,7 @@ void Synth::Impl::clear()
     filePool.waitForBackgroundLoading();
 
     voiceManager_.reset();
+    noteRegistry_.clear();
     for (auto& list : lastKeyswitchLists_)
         list.clear();
     for (auto& list : downKeyswitchLists_)
@@ -1343,6 +1344,7 @@ void Synth::hdNoteOn(int delay, int channel, int noteNumber, float normalizedVel
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
     const int sourceChannel = channel;
+    const SourceAddress source = SourceAddress::fromMidi1(sourceChannel);
     // MPE-off normalization applies only to expression. The original source
     // channel continues through dispatch so lochan/hichan regions can select
     // and own notes without changing legacy modulation behavior.
@@ -1364,7 +1366,9 @@ void Synth::hdNoteOn(int delay, int channel, int noteNumber, float normalizedVel
     if (!isSourceKeyswitch)
         midiState.sourceNoteOnEvent(sourceChannel, noteNumber, normalizedVelocity);
 
-    impl.noteOnDispatch(delay, sourceChannel, channel, noteNumber, normalizedVelocity);
+    const NoteInstanceId noteId = impl.noteRegistry_.beginNote(source, noteNumber);
+    impl.noteOnDispatch(
+        delay, source, channel, noteNumber, normalizedVelocity, noteId);
 }
 
 void Synth::noteOff(int delay, int noteNumber, int velocity) noexcept
@@ -1390,6 +1394,7 @@ void Synth::hdNoteOff(int delay, int channel, int noteNumber, float normalizedVe
     ASSERT(noteNumber >= 0);
     Impl& impl = *impl_;
     const int sourceChannel = channel;
+    const SourceAddress source = SourceAddress::fromMidi1(sourceChannel);
     if (!impl.mpeEnabled_)
         channel = 0;
     ScopedTiming logger { impl.dispatchDuration_, ScopedTiming::Operation::addToDuration };
@@ -1414,11 +1419,13 @@ void Synth::hdNoteOff(int delay, int channel, int noteNumber, float normalizedVe
     const float globalVelocity = midiState.getNoteVelocity(noteNumber);
     const float sourceVelocity = midiState.getSourceNoteVelocity(sourceChannel, noteNumber);
 
+    const NoteInstanceId noteId = impl.noteRegistry_.endNote(source, noteNumber);
     for (auto& voice : impl.voiceManager_)
-        voice.registerNoteOff(delay, channel, sourceChannel, noteNumber, globalVelocity);
+        voice.registerNoteOff(
+            delay, channel, sourceChannel, noteNumber, globalVelocity, noteId);
 
-    impl.noteOffDispatch(delay, sourceChannel, channel, noteNumber,
-        globalVelocity, sourceVelocity);
+    impl.noteOffDispatch(delay, source, channel, noteNumber,
+        globalVelocity, sourceVelocity, noteId);
 }
 
 void Synth::Impl::startVoice(Layer* layer, int delay, const TriggerEvent& triggerEvent, SisterVoiceRingBuilder& ring) noexcept
@@ -1446,17 +1453,18 @@ void Synth::Impl::checkOffGroups(const Region* region, int delay, int number,
         if (voice.checkOffGroup(region, delay, number, sourceChannel)) {
             const TriggerEvent& event = voice.getTriggerEvent();
             if (event.type == TriggerEventType::NoteOn && !chokedByCC) {
-                noteOffDispatch(delay, event.sourceChannel, event.channel,
-                    event.number, event.value, event.value);
+                noteOffDispatch(delay, event.source, event.channel,
+                    event.number, event.value, event.value, event.noteId);
             }
         }
     }
 }
 
-void Synth::Impl::noteOffDispatch(int delay, int sourceChannel, int expressionChannel,
-    int noteNumber, float globalVelocity,
-    float sourceVelocity) noexcept
+void Synth::Impl::noteOffDispatch(int delay, SourceAddress source,
+    int expressionChannel, int noteNumber, float globalVelocity,
+    float sourceVelocity, NoteInstanceId noteId) noexcept
 {
+    const int sourceChannel = source.channel;
     const auto randValue = randNoteDistribution_(Random::randomGenerator);
     SisterVoiceRingBuilder ring;
 
@@ -1470,7 +1478,7 @@ void Synth::Impl::noteOffDispatch(int delay, int sourceChannel, int expressionCh
         const Region& region = layer->getRegion();
         const float velocity = region.isChannelRestricted() ? sourceVelocity : globalVelocity;
         if (layer->registerNoteOff(noteNumber, velocity, randValue,
-                sourceChannel, expressionChannel)) {
+                sourceChannel, expressionChannel, noteId)) {
             if (region.trigger == Trigger::release && !region.rtDead
                 && !voiceManager_.playingAttackVoice(&region, sourceChannel))
                 continue;
@@ -1478,16 +1486,18 @@ void Synth::Impl::noteOffDispatch(int delay, int sourceChannel, int expressionCh
             checkOffGroups(&region, delay, noteNumber, sourceChannel);
             const TriggerEvent triggerEvent {
                 TriggerEventType::NoteOff, noteNumber, velocity,
-                expressionChannel, sourceChannel
+                expressionChannel, source, noteId
             };
             startVoice(layer, delay, triggerEvent, ring);
         }
     }
 }
 
-void Synth::Impl::noteOnDispatch(int delay, int sourceChannel, int expressionChannel,
-    int noteNumber, float velocity) noexcept
+void Synth::Impl::noteOnDispatch(int delay, SourceAddress source,
+    int expressionChannel, int noteNumber, float velocity,
+    NoteInstanceId noteId) noexcept
 {
+    const int sourceChannel = source.channel;
     const auto randValue = randNoteDistribution_(Random::randomGenerator);
     SisterVoiceRingBuilder ring;
     MidiState& midiState = resources_.getMidiState();
@@ -1534,7 +1544,7 @@ void Synth::Impl::noteOnDispatch(int delay, int sourceChannel, int expressionCha
             checkOffGroups(&region, delay, noteNumber, sourceChannel);
             const TriggerEvent triggerEvent {
                 TriggerEventType::NoteOn, noteNumber, velocity,
-                expressionChannel, sourceChannel
+                expressionChannel, source, noteId
             };
             startVoice(layer, delay, triggerEvent, ring);
         }
@@ -1559,9 +1569,11 @@ void Synth::Impl::startDelayedSustainReleases(Layer* layer, int delay,
             return;
         }
 
-        for (auto& note : layer->delayedSustainReleases_) {
+        for (const Layer::DelayedRelease& release : layer->delayedSustainReleases_) {
             const TriggerEvent event {
-                TriggerEventType::NoteOff, note.first, note.second, 0, 0
+                TriggerEventType::NoteOff, release.noteNumber, release.velocity,
+                release.expressionChannel,
+                SourceAddress::fromMidi1(release.sourceChannel), release.noteId
             };
             startVoice(layer, delay, event, ring);
         }
@@ -1581,7 +1593,8 @@ void Synth::Impl::startDelayedSustainReleases(Layer* layer, int delay,
             || voiceManager_.playingAttackVoice(&region, release.sourceChannel)) {
             const TriggerEvent event {
                 TriggerEventType::NoteOff, release.noteNumber, release.velocity,
-                release.expressionChannel, release.sourceChannel
+                release.expressionChannel,
+                SourceAddress::fromMidi1(release.sourceChannel), release.noteId
             };
             startVoice(layer, delay, event, ring);
         }
@@ -1602,9 +1615,11 @@ void Synth::Impl::startDelayedSostenutoReleases(Layer* layer, int delay,
             return;
         }
 
-        for (auto& note : layer->delayedSostenutoReleases_) {
+        for (const Layer::DelayedRelease& release : layer->delayedSostenutoReleases_) {
             const TriggerEvent event {
-                TriggerEventType::NoteOff, note.first, note.second, 0, 0
+                TriggerEventType::NoteOff, release.noteNumber, release.velocity,
+                release.expressionChannel,
+                SourceAddress::fromMidi1(release.sourceChannel), release.noteId
             };
             startVoice(layer, delay, event, ring);
         }
@@ -1624,7 +1639,8 @@ void Synth::Impl::startDelayedSostenutoReleases(Layer* layer, int delay,
             || voiceManager_.playingAttackVoice(&region, release.sourceChannel)) {
             const TriggerEvent event {
                 TriggerEventType::NoteOff, release.noteNumber, release.velocity,
-                release.expressionChannel, release.sourceChannel
+                release.expressionChannel,
+                SourceAddress::fromMidi1(release.sourceChannel), release.noteId
             };
             startVoice(layer, delay, event, ring);
         }
@@ -1645,7 +1661,8 @@ void Synth::Impl::ccDispatch(int delay, int sourceChannel, int expressionChannel
 {
     SisterVoiceRingBuilder ring;
     const TriggerEvent triggerEvent {
-        TriggerEventType::CC, ccNumber, value, expressionChannel, sourceChannel
+        TriggerEventType::CC, ccNumber, value, expressionChannel,
+        SourceAddress::fromMidi1(sourceChannel)
     };
     const auto randValue = randNoteDistribution_(Random::randomGenerator);
     MidiState& midiState = resources_.getMidiState();
@@ -1661,8 +1678,13 @@ void Synth::Impl::ccDispatch(int delay, int sourceChannel, int expressionChannel
         if (region.checkSostenuto && ccNumber == region.sostenutoCC
             && value < region.sostenutoThreshold) {
             if (!region.isChannelRestricted() && layer->sustainPressed_) {
-                for (const auto& note : layer->delayedSostenutoReleases_)
-                    layer->delaySustainRelease(note.first, note.second);
+                for (const Layer::DelayedRelease& release
+                    : layer->delayedSostenutoReleases_) {
+                    layer->delaySustainRelease(
+                        release.noteNumber, release.velocity,
+                        release.sourceChannel, release.expressionChannel,
+                        release.noteId);
+                }
                 layer->delayedSostenutoReleases_.clear();
             } else if (!region.isChannelRestricted()) {
                 startDelayedSostenutoReleases(
@@ -1688,7 +1710,8 @@ void Synth::Impl::ccDispatch(int delay, int sourceChannel, int expressionChannel
                         }
                         layer->delaySustainRelease(
                             release.noteNumber, release.velocity,
-                            release.sourceChannel, release.expressionChannel);
+                            release.sourceChannel, release.expressionChannel,
+                            release.noteId);
                         releases[i] = releases.back();
                         releases.pop_back();
                     }
@@ -1789,6 +1812,7 @@ void Synth::Impl::performHdcc(int delay, int channel, int ccNumber, float normVa
         if (ccNumber == config::allNotesOffCC || ccNumber == config::allSoundOffCC) {
             for (auto& voice : voiceManager_)
                 voice.reset();
+            noteRegistry_.clear();
             midiState.allNotesOff(delay);
             return;
         }
@@ -2506,6 +2530,8 @@ void Synth::Impl::resetVoices(int numVoices)
         set->removeAllVoices();
 
     voiceManager_.requireNumVoices(numVoices_, resources_);
+    noteRegistry_.configure(std::max<size_t>(
+        256, static_cast<size_t>(numVoices_) * 2));
 
     for (auto& voice : voiceManager_) {
         voice.setSampleRate(this->sampleRate_);
@@ -2730,6 +2756,7 @@ void Synth::allSoundOff() noexcept
     Impl& impl = *impl_;
     for (auto& voice : impl.voiceManager_)
         voice.reset();
+    impl.noteRegistry_.clear();
     for (int i = 0; i < impl.numOutputs_; ++i) {
         for (auto& effectBus : impl.getEffectBusesForOutput(i))
             if (effectBus)
