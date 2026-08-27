@@ -7,7 +7,9 @@
 #pragma once
 #include <array>
 #include <bitset>
+#include <vector>
 #include "CCMap.h"
+#include "ExpressionContext.h"
 #include "Range.h"
 
 namespace sfz
@@ -96,6 +98,25 @@ public:
      * @param samplesPerBlock
      */
     void setSamplesPerBlock(int samplesPerBlock) noexcept;
+
+    /**
+     * @brief Densify sample-accurate controller slots for the loaded SFZ.
+     * Control-thread only; scalar state for all controller numbers remains.
+     */
+    void configureExpressionControls(
+        const std::array<bool, config::numCCs>& usedControllers);
+
+    /**
+     * @brief Preallocate/recycle note-scoped expression contexts alongside
+     * the logical-note registry. Configuration is control-thread only.
+     */
+    void configureNoteExpressionContexts(size_t capacity);
+    void beginNoteExpression(NoteInstanceId noteId) noexcept;
+    void endNoteExpression(NoteInstanceId noteId) noexcept;
+    void clearNoteExpressionContexts() noexcept;
+    ExpressionContext* getExpressionContext(ExpressionTarget target) noexcept;
+    const ExpressionContext* getExpressionContext(ExpressionTarget target) const noexcept;
+    uint64_t getExpressionOverflowCount() const noexcept;
     /**
      * @brief Set the sample rate. If you do not call it it is initialized
      * to sfz::config::defaultSampleRate.
@@ -352,15 +373,6 @@ public:
 
 private:
 
-    /**
-     * @brief Insert events in a sorted event vector.
-     *
-     * @param events
-     * @param delay
-     * @param value
-     */
-    void insertEventInVector(EventVector& events, int delay, float value);
-
     int activeNotes { 0 };
 
     /**
@@ -399,31 +411,28 @@ private:
      */
     int lastNotePlayed { -1 };
 
-    /**
-     * @brief Per-channel event state. Holds the pitch/CC/aftertouch event
-     * vectors for one MIDI channel. Introduced so MPE-aware callers can
-     * route events to a specific member channel without colliding with
-     * other channels' modulation. M1 wires only the master channel; M3
-     * will add channel-aware public API methods that target channels
-     * 1..15. Until then, all events resolve to channelStates[masterChannel]
-     * and behavior is byte-for-byte identical to the pre-refactor code.
-     */
-    struct ChannelState {
-        std::array<EventVector, config::numCCs> ccEvents;
-        std::array<EventVector, 128> polyAftertouchEvents;
-        EventVector pitchEvents;
-        EventVector channelAftertouchEvents;
-    };
-
-    /**
-     * @brief Per-channel pitch/CC/aftertouch state. Indexed 0..15 to match
-     * MIDI channels 1..16 (0-indexed). The master channel for non-MPE
-     * input is index 0; MPE member channels occupy 1..15 (or 0..14 with
-     * channel 16 as master, depending on zone configuration — currently
-     * fixed at master=0 pending M3).
-     */
     static constexpr int masterChannel = 0;
-    std::array<ChannelState, 16> channelStates;
+    static constexpr size_t compatibilityControllerSlots = 8;
+    static constexpr size_t compatibilityPolyPressureSlots = 4;
+    static constexpr size_t noteTimelineEvents = 65;
+
+    ExpressionContext& compatibilityContext(int channel) noexcept;
+    const ExpressionContext& compatibilityContext(int channel) const noexcept;
+
+    // The compatibility channel-0 API resolves to Global. Zone and Channel
+    // contexts remain explicit for adapter/profile milestones; member-channel
+    // compatibility calls currently use channelExpressionContexts_[1..15].
+    ExpressionContext globalExpressionContext_;
+    ExpressionContext lowerZoneExpressionContext_;
+    std::array<ExpressionContext, 16> channelExpressionContexts_;
+
+    struct NoteExpressionSlot {
+        ExpressionContext context;
+        uint16_t generation { 0 };
+        bool active { false };
+    };
+    std::vector<NoteExpressionSlot> noteExpressionSlots_;
+    uint64_t retiredNoteExpressionOverflowCount_ { 0 };
 
     struct SourceNoteState {
         std::bitset<128> pressed;

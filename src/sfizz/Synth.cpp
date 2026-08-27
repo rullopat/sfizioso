@@ -301,6 +301,7 @@ void Synth::Impl::clear()
 
     voiceManager_.reset();
     noteRegistry_.clear();
+    midiState.clearNoteExpressionContexts();
     for (auto& list : lastKeyswitchLists_)
         list.clear();
     for (auto& list : downKeyswitchLists_)
@@ -1026,8 +1027,15 @@ void Synth::Impl::finalizeSfzLoad()
     addEffectBusesIfNecessary(numOutputs_);
     setupModMatrix();
 
-    // cache the set of used CCs for future access
+    // Cache/densify the controls which need sample-accurate expression
+    // timelines. This is a control-thread operation performed after the
+    // complete modulation matrix is known.
     currentUsedCCs_ = collectAllUsedCCs();
+    std::array<bool, config::numCCs> expressionControllers { };
+    for (int cc = 0; cc < config::numCCs; ++cc)
+        expressionControllers[cc] = currentUsedCCs_.test(cc);
+    resources_.getMidiState().configureExpressionControls(
+        expressionControllers);
 
     // cache the set of keys assigned
     for (const LayerPtr& layerPtr : layers_) {
@@ -1367,6 +1375,7 @@ void Synth::hdNoteOn(int delay, int channel, int noteNumber, float normalizedVel
         midiState.sourceNoteOnEvent(sourceChannel, noteNumber, normalizedVelocity);
 
     const NoteInstanceId noteId = impl.noteRegistry_.beginNote(source, noteNumber);
+    midiState.beginNoteExpression(noteId);
     impl.noteOnDispatch(
         delay, source, channel, noteNumber, normalizedVelocity, noteId);
 }
@@ -1426,6 +1435,7 @@ void Synth::hdNoteOff(int delay, int channel, int noteNumber, float normalizedVe
 
     impl.noteOffDispatch(delay, source, channel, noteNumber,
         globalVelocity, sourceVelocity, noteId);
+    midiState.endNoteExpression(noteId);
 }
 
 void Synth::Impl::startVoice(Layer* layer, int delay, const TriggerEvent& triggerEvent, SisterVoiceRingBuilder& ring) noexcept
@@ -1813,6 +1823,7 @@ void Synth::Impl::performHdcc(int delay, int channel, int ccNumber, float normVa
             for (auto& voice : voiceManager_)
                 voice.reset();
             noteRegistry_.clear();
+            midiState.clearNoteExpressionContexts();
             midiState.allNotesOff(delay);
             return;
         }
@@ -2532,6 +2543,8 @@ void Synth::Impl::resetVoices(int numVoices)
     voiceManager_.requireNumVoices(numVoices_, resources_);
     noteRegistry_.configure(std::max<size_t>(
         256, static_cast<size_t>(numVoices_) * 2));
+    resources_.getMidiState().configureNoteExpressionContexts(
+        noteRegistry_.capacity());
 
     for (auto& voice : voiceManager_) {
         voice.setSampleRate(this->sampleRate_);
@@ -2757,6 +2770,7 @@ void Synth::allSoundOff() noexcept
     for (auto& voice : impl.voiceManager_)
         voice.reset();
     impl.noteRegistry_.clear();
+    impl.resources_.getMidiState().clearNoteExpressionContexts();
     for (int i = 0; i < impl.numOutputs_; ++i) {
         for (auto& effectBus : impl.getEffectBusesForOutput(i))
             if (effectBus)

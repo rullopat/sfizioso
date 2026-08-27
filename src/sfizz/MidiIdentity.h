@@ -74,4 +74,103 @@ constexpr bool operator!=(NoteInstanceId lhs, NoteInstanceId rhs) noexcept
     return !(lhs == rhs);
 }
 
+/**
+ * @brief Scope selected by a transport/profile adapter for expression.
+ */
+enum class ExpressionScope : uint8_t {
+    Global,
+    Zone,
+    Channel,
+    Note,
+};
+
+/**
+ * @brief Protocol-neutral target of one resolved expression event.
+ *
+ * The packed id is deliberately transport-independent. Channel ids retain
+ * group + channel, while note ids retain registry index + generation.
+ */
+struct ExpressionTarget {
+    ExpressionScope scope { ExpressionScope::Global };
+    uint32_t id { 0 };
+
+    static constexpr ExpressionTarget global() noexcept
+    {
+        return { ExpressionScope::Global, 0 };
+    }
+
+    static constexpr ExpressionTarget zone(uint16_t zoneId) noexcept
+    {
+        return { ExpressionScope::Zone, zoneId };
+    }
+
+    static constexpr ExpressionTarget channel(SourceAddress source) noexcept
+    {
+        return { ExpressionScope::Channel,
+            static_cast<uint32_t>((source.group << 4) | source.channel) };
+    }
+
+    static constexpr ExpressionTarget note(NoteInstanceId noteId) noexcept
+    {
+        return { ExpressionScope::Note,
+            (static_cast<uint32_t>(noteId.generation) << 16) | noteId.index };
+    }
+
+    constexpr SourceAddress sourceAddress() const noexcept
+    {
+        return { static_cast<uint8_t>((id >> 4) & 0x0f),
+            static_cast<uint8_t>(id & 0x0f) };
+    }
+
+    constexpr NoteInstanceId noteInstanceId() const noexcept
+    {
+        return { static_cast<uint16_t>(id & 0xffff),
+            static_cast<uint16_t>(id >> 16) };
+    }
+};
+
+constexpr bool operator==(ExpressionTarget lhs, ExpressionTarget rhs) noexcept
+{
+    return lhs.scope == rhs.scope && lhs.id == rhs.id;
+}
+
+constexpr bool operator!=(ExpressionTarget lhs, ExpressionTarget rhs) noexcept
+{
+    return !(lhs == rhs);
+}
+
+/**
+ * Controller namespaces must remain distinct when protocols are normalized.
+ */
+enum class ExpressionControlNamespace : uint8_t {
+    MidiCC,
+    SfzExtendedCC,
+    Midi2Registered,
+    Midi2Assignable,
+};
+
+struct ExpressionControlId {
+    ExpressionControlNamespace nameSpace { ExpressionControlNamespace::MidiCC };
+    uint16_t number { 0 };
+
+    static constexpr ExpressionControlId fromSfizzCC(int cc) noexcept
+    {
+        return cc < 128
+            ? ExpressionControlId { ExpressionControlNamespace::MidiCC,
+                  static_cast<uint16_t>(cc) }
+            : ExpressionControlId { ExpressionControlNamespace::SfzExtendedCC,
+                  static_cast<uint16_t>(cc) };
+    }
+};
+
+constexpr bool operator==(ExpressionControlId lhs, ExpressionControlId rhs) noexcept
+{
+    return lhs.nameSpace == rhs.nameSpace && lhs.number == rhs.number;
+}
+
+constexpr bool operator!=(ExpressionControlId lhs, ExpressionControlId rhs) noexcept
+{
+    return !(lhs == rhs);
+}
+
 } // namespace sfz

@@ -11,6 +11,17 @@
 
 sfz::MidiState::MidiState()
 {
+    const size_t eventCapacity = static_cast<size_t>(samplesPerBlock) + 1;
+    globalExpressionContext_.configure(
+        config::numCCs, 128, eventCapacity);
+    lowerZoneExpressionContext_.configure(
+        compatibilityControllerSlots, compatibilityPolyPressureSlots,
+        eventCapacity, /*retainAllControllerScalars=*/false);
+    for (ExpressionContext& context : channelExpressionContexts_) {
+        context.configure(
+            compatibilityControllerSlots, compatibilityPolyPressureSlots,
+            eventCapacity, /*retainAllControllerScalars=*/false);
+    }
     resetEventStates();
     resetNoteStates();
 }
@@ -44,7 +55,6 @@ void sfz::MidiState::noteOnEvent(int delay, int noteNumber, float velocity) noex
         ccEvent(delay, ExtendedCCs::alternate, alternate);
         alternate = alternate == 0.0f ? 1.0f : 0.0f;
     }
-
 }
 
 void sfz::MidiState::noteOffEvent(int delay, int noteNumber, float velocity) noexcept
@@ -63,7 +73,6 @@ void sfz::MidiState::noteOffEvent(int delay, int noteNumber, float velocity) noe
             activeNotes--;
         noteStates[noteNumber] = false;
     }
-
 }
 
 void sfz::MidiState::sourceNoteOnEvent(int channel, int noteNumber, float velocity) noexcept
@@ -207,49 +216,135 @@ void sfz::MidiState::advanceTime(int numSamples) noexcept
 
 void sfz::MidiState::flushEvents() noexcept
 {
-    auto flushEventVector = [] (EventVector& events) {
-        if (events.empty())
-            return;
-        events.front().value = events.back().value;
-        events.front().delay = 0;
-        events.resize(1);
-    };
-
-    // Master always carries its initialised sentinel event vectors, so its
-    // flush is unconditional. Member channels are populated lazily on
-    // first write, so most of their event vectors stay empty under
-    // non-MPE input — flushEventVector skips empties cheaply.
-    for (auto& cs : channelStates) {
-        for (auto& events : cs.ccEvents)
-            flushEventVector(events);
-
-        for (auto& events : cs.polyAftertouchEvents)
-            flushEventVector(events);
-
-        flushEventVector(cs.pitchEvents);
-        flushEventVector(cs.channelAftertouchEvents);
-    }
+    globalExpressionContext_.flushEvents();
+    lowerZoneExpressionContext_.flushEvents();
+    for (ExpressionContext& context : channelExpressionContexts_)
+        context.flushEvents();
+    for (NoteExpressionSlot& slot : noteExpressionSlots_)
+        slot.context.flushEvents();
 }
-
 
 void sfz::MidiState::setSamplesPerBlock(int samplesPerBlock) noexcept
 {
-    auto updateEventBufferSize = [=] (EventVector& events) {
-        events.shrink_to_fit();
-        events.reserve(samplesPerBlock);
-    };
     this->samplesPerBlock = samplesPerBlock;
-    // M1: only master channel reserves buffer space; M3 will reserve
-    // for any active member channel as well.
-    auto& cs = channelStates[masterChannel];
-    for (auto& events: cs.ccEvents)
-        updateEventBufferSize(events);
+    const size_t eventCapacity = static_cast<size_t>(samplesPerBlock) + 1;
+    globalExpressionContext_.setTimelineEventCapacity(eventCapacity);
+    lowerZoneExpressionContext_.setTimelineEventCapacity(eventCapacity);
+    for (ExpressionContext& context : channelExpressionContexts_)
+        context.setTimelineEventCapacity(eventCapacity);
+}
 
-    for (auto& events: cs.polyAftertouchEvents)
-        updateEventBufferSize(events);
+void sfz::MidiState::configureExpressionControls(
+    const std::array<bool, config::numCCs>& usedControllers)
+{
+    globalExpressionContext_.configureSfizzControllers(usedControllers);
 
-    updateEventBufferSize(cs.pitchEvents);
-    updateEventBufferSize(cs.channelAftertouchEvents);
+    // CC74 is the MPE profile's standardized per-note timbre control even
+    // when the loaded instrument does not currently connect it. Other
+    // channel timelines are exactly the controls consumed by the SFZ.
+    std::array<bool, config::numCCs> profileControllers = usedControllers;
+    profileControllers[74] = true;
+    lowerZoneExpressionContext_.configureSfizzControllers(profileControllers);
+    for (ExpressionContext& context : channelExpressionContexts_)
+        context.configureSfizzControllers(profileControllers);
+}
+
+void sfz::MidiState::configureNoteExpressionContexts(size_t capacity)
+{
+    noteExpressionSlots_.clear();
+    retiredNoteExpressionOverflowCount_ = 0;
+    noteExpressionSlots_.resize(capacity);
+    for (NoteExpressionSlot& slot : noteExpressionSlots_) {
+        slot.context.configure(
+            0, 0, noteTimelineEvents, /*retainAllControllerScalars=*/false);
+        slot.generation = 0;
+        slot.active = false;
+    }
+}
+
+void sfz::MidiState::beginNoteExpression(NoteInstanceId noteId) noexcept
+{
+    if (!noteId.valid() || noteId.index >= noteExpressionSlots_.size())
+        return;
+    NoteExpressionSlot& slot = noteExpressionSlots_[noteId.index];
+    retiredNoteExpressionOverflowCount_ += slot.context.overflowCount();
+    slot.context.reset();
+    slot.generation = noteId.generation;
+    slot.active = true;
+}
+
+void sfz::MidiState::endNoteExpression(NoteInstanceId noteId) noexcept
+{
+    if (!noteId.valid() || noteId.index >= noteExpressionSlots_.size())
+        return;
+    NoteExpressionSlot& slot = noteExpressionSlots_[noteId.index];
+    if (slot.generation == noteId.generation)
+        slot.active = false;
+}
+
+void sfz::MidiState::clearNoteExpressionContexts() noexcept
+{
+    for (NoteExpressionSlot& slot : noteExpressionSlots_)
+        slot.active = false;
+}
+
+sfz::ExpressionContext& sfz::MidiState::compatibilityContext(int channel) noexcept
+{
+    return channel == masterChannel
+        ? globalExpressionContext_
+        : channelExpressionContexts_[channel];
+}
+
+const sfz::ExpressionContext& sfz::MidiState::compatibilityContext(int channel) const noexcept
+{
+    return channel == masterChannel
+        ? globalExpressionContext_
+        : channelExpressionContexts_[channel];
+}
+
+sfz::ExpressionContext* sfz::MidiState::getExpressionContext(
+    ExpressionTarget target) noexcept
+{
+    switch (target.scope) {
+    case ExpressionScope::Global:
+        return &globalExpressionContext_;
+    case ExpressionScope::Zone:
+        return target.id == 0 ? &lowerZoneExpressionContext_ : nullptr;
+    case ExpressionScope::Channel: {
+        const SourceAddress source = target.sourceAddress();
+        return source.group == 0 && source.channel < channelExpressionContexts_.size()
+            ? &channelExpressionContexts_[source.channel]
+            : nullptr;
+    }
+    case ExpressionScope::Note: {
+        const NoteInstanceId noteId = target.noteInstanceId();
+        if (!noteId.valid() || noteId.index >= noteExpressionSlots_.size())
+            return nullptr;
+        NoteExpressionSlot& slot = noteExpressionSlots_[noteId.index];
+        return slot.active && slot.generation == noteId.generation
+            ? &slot.context
+            : nullptr;
+    }
+    }
+    return nullptr;
+}
+
+const sfz::ExpressionContext* sfz::MidiState::getExpressionContext(
+    ExpressionTarget target) const noexcept
+{
+    return const_cast<MidiState*>(this)->getExpressionContext(target);
+}
+
+uint64_t sfz::MidiState::getExpressionOverflowCount() const noexcept
+{
+    uint64_t count = retiredNoteExpressionOverflowCount_
+        + globalExpressionContext_.overflowCount()
+        + lowerZoneExpressionContext_.overflowCount();
+    for (const ExpressionContext& context : channelExpressionContexts_)
+        count += context.overflowCount();
+    for (const NoteExpressionSlot& slot : noteExpressionSlots_)
+        count += slot.context.overflowCount();
+    return count;
 }
 
 float sfz::MidiState::getNoteDuration(int noteNumber, int delay) const
@@ -279,24 +374,6 @@ float sfz::MidiState::getVelocityOverride() const noexcept
     return velocityOverride;
 }
 
-void sfz::MidiState::insertEventInVector(EventVector& events, int delay, float value)
-{
-    // Member channels are populated lazily — their vectors start empty and
-    // only grow on first write. linearEnvelope downstream ASSERTs the
-    // vector starts at delay 0, so seed the centre-value sentinel before
-    // inserting if this is the first ever event on this channel/CC slot.
-    // Master channels are pre-seeded at construction so this is a no-op
-    // for them.
-    if (events.empty())
-        events.push_back({ 0, 0.0f });
-
-    const auto insertionPoint = absl::c_lower_bound(events, delay, MidiEventDelayComparator {});
-    if (insertionPoint == events.end() || insertionPoint->delay != delay)
-        events.insert(insertionPoint, { delay, value });
-    else
-        insertionPoint->value = value;
-}
-
 void sfz::MidiState::pitchBendEvent(int delay, float pitchBendValue) noexcept
 {
     pitchBendEvent(delay, masterChannel, pitchBendValue);
@@ -305,9 +382,9 @@ void sfz::MidiState::pitchBendEvent(int delay, float pitchBendValue) noexcept
 void sfz::MidiState::pitchBendEvent(int delay, int channel, float pitchBendValue) noexcept
 {
     ASSERT(pitchBendValue >= -1.0f && pitchBendValue <= 1.0f);
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return;
-    insertEventInVector(channelStates[channel].pitchEvents, delay, pitchBendValue);
+    compatibilityContext(channel).pitchEvent(delay, pitchBendValue);
 }
 
 float sfz::MidiState::getPitchBend() const noexcept
@@ -317,15 +394,12 @@ float sfz::MidiState::getPitchBend() const noexcept
 
 float sfz::MidiState::getPitchBend(int channel) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return 0.0f;
-    const auto& events = channelStates[channel].pitchEvents;
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return getPitchBend(masterChannel);
-        return 0.0f;
-    }
-    return events.back().value;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasPitch() && channel != masterChannel)
+        return getPitchBend(masterChannel);
+    return context.pitchValue();
 }
 
 void sfz::MidiState::channelAftertouchEvent(int delay, float aftertouch) noexcept
@@ -336,9 +410,9 @@ void sfz::MidiState::channelAftertouchEvent(int delay, float aftertouch) noexcep
 void sfz::MidiState::channelAftertouchEvent(int delay, int channel, float aftertouch) noexcept
 {
     ASSERT(aftertouch >= -1.0f && aftertouch <= 1.0f);
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return;
-    insertEventInVector(channelStates[channel].channelAftertouchEvents, delay, aftertouch);
+    compatibilityContext(channel).pressureEvent(delay, aftertouch);
 }
 
 void sfz::MidiState::polyAftertouchEvent(int delay, int noteNumber, float aftertouch) noexcept
@@ -349,13 +423,10 @@ void sfz::MidiState::polyAftertouchEvent(int delay, int noteNumber, float aftert
 void sfz::MidiState::polyAftertouchEvent(int delay, int channel, int noteNumber, float aftertouch) noexcept
 {
     ASSERT(aftertouch >= 0.0f && aftertouch <= 1.0f);
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return;
-    auto& events = channelStates[channel].polyAftertouchEvents;
-    if (noteNumber < 0 || noteNumber >= static_cast<int>(events.size()))
-        return;
-
-    insertEventInVector(events[noteNumber], delay, aftertouch);
+    compatibilityContext(channel).polyPressureEvent(
+        delay, noteNumber, aftertouch);
 }
 
 float sfz::MidiState::getChannelAftertouch() const noexcept
@@ -365,15 +436,12 @@ float sfz::MidiState::getChannelAftertouch() const noexcept
 
 float sfz::MidiState::getChannelAftertouch(int channel) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return 0.0f;
-    const auto& events = channelStates[channel].channelAftertouchEvents;
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return getChannelAftertouch(masterChannel);
-        return 0.0f;
-    }
-    return events.back().value;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasPressure() && channel != masterChannel)
+        return getChannelAftertouch(masterChannel);
+    return context.pressureValue();
 }
 
 float sfz::MidiState::getPolyAftertouch(int noteNumber) const noexcept
@@ -383,18 +451,14 @@ float sfz::MidiState::getPolyAftertouch(int noteNumber) const noexcept
 
 float sfz::MidiState::getPolyAftertouch(int channel, int noteNumber) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return 0.0f;
     if (noteNumber < 0 || noteNumber > 127)
         return 0.0f;
-
-    const auto& events = channelStates[channel].polyAftertouchEvents[noteNumber];
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return getPolyAftertouch(masterChannel, noteNumber);
-        return 0.0f;
-    }
-    return events.back().value;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasPolyPressure(noteNumber) && channel != masterChannel)
+        return getPolyAftertouch(masterChannel, noteNumber);
+    return context.polyPressureValue(noteNumber);
 }
 
 void sfz::MidiState::ccEvent(int delay, int ccNumber, float ccValue) noexcept
@@ -404,11 +468,11 @@ void sfz::MidiState::ccEvent(int delay, int ccNumber, float ccValue) noexcept
 
 void sfz::MidiState::ccEvent(int delay, int channel, int ccNumber, float ccValue) noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return;
     if (ccNumber < 0 || ccNumber >= config::numCCs)
         return;
-    insertEventInVector(channelStates[channel].ccEvents[ccNumber], delay, ccValue);
+    compatibilityContext(channel).controllerEvent(delay, ccNumber, ccValue);
 }
 
 void sfz::MidiState::sourceCCEvent(int channel, int ccNumber, float ccValue) noexcept
@@ -443,15 +507,12 @@ float sfz::MidiState::getCCValue(int ccNumber) const noexcept
 float sfz::MidiState::getCCValue(int channel, int ccNumber) const noexcept
 {
     ASSERT(ccNumber >= 0 && ccNumber < config::numCCs);
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return 0.0f;
-    const auto& events = channelStates[channel].ccEvents[ccNumber];
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return getCCValue(masterChannel, ccNumber);
-        return 0.0f;
-    }
-    return events.back().value;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasController(ccNumber) && channel != masterChannel)
+        return getCCValue(masterChannel, ccNumber);
+    return context.controllerValue(ccNumber);
 }
 
 float sfz::MidiState::getCCValueAt(int ccNumber, int delay) const noexcept
@@ -462,25 +523,22 @@ float sfz::MidiState::getCCValueAt(int ccNumber, int delay) const noexcept
 float sfz::MidiState::getCCValueAt(int channel, int ccNumber, int delay) const noexcept
 {
     ASSERT(ccNumber >= 0 && ccNumber < config::numCCs);
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return 0.0f;
-    const auto& events = channelStates[channel].ccEvents[ccNumber];
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return getCCValueAt(masterChannel, ccNumber, delay);
-        return 0.0f;
-    }
-    const auto ccEvent = absl::c_lower_bound(
-        events, delay, MidiEventDelayComparator {});
-    if (ccEvent != events.end())
-        return ccEvent->value;
-    else
-        return events.back().value;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasController(ccNumber) && channel != masterChannel)
+        return getCCValueAt(masterChannel, ccNumber, delay);
+    const EventVector* events = context.controllerEvents(ccNumber);
+    if (events == nullptr)
+        return context.controllerValue(ccNumber);
+    const auto event = absl::c_lower_bound(
+        *events, delay, MidiEventDelayComparator { });
+    return event != events->end() ? event->value : events->back().value;
 }
 
 void sfz::MidiState::resetNoteStates() noexcept
 {
-    for (auto& velocity: lastNoteVelocities)
+    for (auto& velocity : lastNoteVelocities)
         velocity = 0.0f;
 
     velocityOverride = 0.0f;
@@ -489,18 +547,18 @@ void sfz::MidiState::resetNoteStates() noexcept
     lastNotePlayed = -1;
     alternate = 0.0f;
 
-    auto setEvents = [] (EventVector& events, float value) {
-        events.clear();
-        events.push_back({ 0, value });
-    };
-
-    auto& cs = channelStates[masterChannel];
-    setEvents(cs.ccEvents[ExtendedCCs::noteOnVelocity], 0.0f);
-    setEvents(cs.ccEvents[ExtendedCCs::keyboardNoteNumber], 0.0f);
-    setEvents(cs.ccEvents[ExtendedCCs::unipolarRandom], 0.0f);
-    setEvents(cs.ccEvents[ExtendedCCs::bipolarRandom], 0.0f);
-    setEvents(cs.ccEvents[ExtendedCCs::keyboardNoteGate], 0.0f);
-    setEvents(cs.ccEvents[ExtendedCCs::alternate], 0.0f);
+    globalExpressionContext_.controllerEvent(
+        0, ExtendedCCs::noteOnVelocity, 0.0f);
+    globalExpressionContext_.controllerEvent(
+        0, ExtendedCCs::keyboardNoteNumber, 0.0f);
+    globalExpressionContext_.controllerEvent(
+        0, ExtendedCCs::unipolarRandom, 0.0f);
+    globalExpressionContext_.controllerEvent(
+        0, ExtendedCCs::bipolarRandom, 0.0f);
+    globalExpressionContext_.controllerEvent(
+        0, ExtendedCCs::keyboardNoteGate, 0.0f);
+    globalExpressionContext_.controllerEvent(
+        0, ExtendedCCs::alternate, 0.0f);
 
     noteStates.reset();
     absl::c_fill(noteOnTimes, 0);
@@ -519,17 +577,17 @@ void sfz::MidiState::resetNoteStates() noexcept
 
 const sfz::EventVector& sfz::MidiState::getPitchEventsRaw(int channel) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return nullEvent;
-    return channelStates[channel].pitchEvents;
+    return compatibilityContext(channel).pitchEvents();
 }
 
 float sfz::MidiState::getPitchBendRaw(int channel) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return 0.0f;
-    const auto& events = channelStates[channel].pitchEvents;
-    return events.empty() ? 0.0f : events.back().value;
+    const ExpressionContext& context = compatibilityContext(channel);
+    return context.hasPitch() ? context.pitchValue() : 0.0f;
 }
 
 void sfz::MidiState::setMPEPitchBendRange(float masterSemitones, float perNoteSemitones) noexcept
@@ -549,22 +607,15 @@ void sfz::MidiState::resetEventStates() noexcept
     sourcePitchBends.fill(0.0f);
     sourceChannelAftertouch.fill(0.0f);
 
-    auto clearEvents = [] (EventVector& events) {
-        events.clear();
-        events.push_back({ 0, 0.0f });
-    };
-
-    // M1: only master channel needs initialised event vectors. M3 will
-    // initialise additional channels lazily on first write.
-    auto& cs = channelStates[masterChannel];
-    for (auto& events : cs.ccEvents)
-        clearEvents(events);
-
-    for (auto& events : cs.polyAftertouchEvents)
-        clearEvents(events);
-
-    clearEvents(cs.pitchEvents);
-    clearEvents(cs.channelAftertouchEvents);
+    globalExpressionContext_.reset();
+    lowerZoneExpressionContext_.reset();
+    retiredNoteExpressionOverflowCount_ = 0;
+    for (ExpressionContext& context : channelExpressionContexts_)
+        context.reset();
+    for (NoteExpressionSlot& slot : noteExpressionSlots_) {
+        slot.context.reset();
+        slot.active = false;
+    }
 }
 
 const sfz::EventVector& sfz::MidiState::getCCEvents(int ccIdx) const noexcept
@@ -576,19 +627,13 @@ const sfz::EventVector& sfz::MidiState::getCCEvents(int channel, int ccIdx) cons
 {
     if (ccIdx < 0 || ccIdx >= config::numCCs)
         return nullEvent;
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return nullEvent;
-    const auto& events = channelStates[channel].ccEvents[ccIdx];
-    if (events.empty()) {
-        // MPE 1.0 inheritance: a member channel that has never received its
-        // own CC value reads the master channel's value. Without this the
-        // engine's defaults (CC7=Volume@~0.79, CC10=Pan@0.5, CC11=Expression
-        // @1.0) collapse to 0 on member channels and voices play near-silent.
-        if (channel != masterChannel)
-            return channelStates[masterChannel].ccEvents[ccIdx];
-        return nullEvent;
-    }
-    return events;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasController(ccIdx) && channel != masterChannel)
+        return getCCEvents(masterChannel, ccIdx);
+    const EventVector* events = context.controllerEvents(ccIdx);
+    return events != nullptr ? *events : nullEvent;
 }
 
 const sfz::EventVector& sfz::MidiState::getPitchEvents() const noexcept
@@ -598,15 +643,12 @@ const sfz::EventVector& sfz::MidiState::getPitchEvents() const noexcept
 
 const sfz::EventVector& sfz::MidiState::getPitchEvents(int channel) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return nullEvent;
-    const auto& events = channelStates[channel].pitchEvents;
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return channelStates[masterChannel].pitchEvents;
-        return nullEvent;
-    }
-    return events;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasPitch() && channel != masterChannel)
+        return getPitchEvents(masterChannel);
+    return context.pitchEvents();
 }
 
 const sfz::EventVector& sfz::MidiState::getChannelAftertouchEvents() const noexcept
@@ -616,15 +658,12 @@ const sfz::EventVector& sfz::MidiState::getChannelAftertouchEvents() const noexc
 
 const sfz::EventVector& sfz::MidiState::getChannelAftertouchEvents(int channel) const noexcept
 {
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return nullEvent;
-    const auto& events = channelStates[channel].channelAftertouchEvents;
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return channelStates[masterChannel].channelAftertouchEvents;
-        return nullEvent;
-    }
-    return events;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasPressure() && channel != masterChannel)
+        return getChannelAftertouchEvents(masterChannel);
+    return context.pressureEvents();
 }
 
 const sfz::EventVector& sfz::MidiState::getPolyAftertouchEvents(int noteNumber) const noexcept
@@ -636,15 +675,13 @@ const sfz::EventVector& sfz::MidiState::getPolyAftertouchEvents(int channel, int
 {
     if (noteNumber < 0 || noteNumber > 127)
         return nullEvent;
-    if (channel < 0 || channel >= static_cast<int>(channelStates.size()))
+    if (channel < 0 || channel >= static_cast<int>(channelExpressionContexts_.size()))
         return nullEvent;
-    const auto& events = channelStates[channel].polyAftertouchEvents[noteNumber];
-    if (events.empty()) {
-        if (channel != masterChannel)
-            return channelStates[masterChannel].polyAftertouchEvents[noteNumber];
-        return nullEvent;
-    }
-    return events;
+    const ExpressionContext& context = compatibilityContext(channel);
+    if (!context.hasPolyPressure(noteNumber) && channel != masterChannel)
+        return getPolyAftertouchEvents(masterChannel, noteNumber);
+    const EventVector* events = context.polyPressureEvents(noteNumber);
+    return events != nullptr ? *events : nullEvent;
 }
 
 int sfz::MidiState::getProgram() const noexcept

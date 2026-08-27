@@ -25,6 +25,7 @@ set(SFIZZ_TEST_SOURCES
     HelpersT.cpp
     AudioBufferT.cpp
     EGDescriptionT.cpp
+    ExpressionContextT.cpp
     RangeT.cpp
     OpcodeT.cpp
     BufferT.cpp

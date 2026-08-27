@@ -70,6 +70,7 @@ set(SFIZZ_HEADERS
     sfizz/Effects.h
     sfizz/EGDescription.h
     sfizz/EQDescription.h
+    sfizz/ExpressionContext.h
     sfizz/EQPool.h
     sfizz/FileId.h
     sfizz/FileMetadata.h
@@ -147,6 +148,7 @@ set(SFIZZ_SOURCES
     sfizz/ADSREnvelope.cpp
     sfizz/SfzFilter.cpp
     sfizz/Curve.cpp
+    sfizz/ExpressionContext.cpp
     sfizz/Smoothers.cpp
     sfizz/Wavetables.cpp
     sfizz/Tuning.cpp

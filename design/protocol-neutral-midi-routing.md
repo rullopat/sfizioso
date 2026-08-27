@@ -138,7 +138,16 @@ The first M1 milestone now establishes identity without moving expression storag
 
 Focused tests cover group/channel separation, FIFO pairing, generation-safe slot reuse, bounded overflow, layered voice sharing, delayed release propagation and repeated-note voice release. The complete Debug, Release and sanitizer suites remain the compatibility gate.
 
-Expression still uses the existing `MidiState::channelStates` topology at this milestone. Context and timeline migration follows separately so identity behavior can be reviewed before storage changes.
+M2 now replaces the expression-vector topology while preserving the M1 identity contract:
+
+- `ExpressionTarget` explicitly addresses Global, lower Zone, group/channel or generation-safe Note scopes. Controller IDs distinguish MIDI CC, SFZ ExtendedCC and future MIDI 2.0 registered/assignable namespaces.
+- `ExpressionContext` stores canonical pitch, pressure and timbre plus dense SFZ-controller and Poly Pressure slots. SFZ load densifies controller timelines from the completed modulation matrix; CC74 is retained as the MPE profile timbre control.
+- Every timeline is allocated/reserved on the control thread. Realtime insertion is sorted and bounded, never grows a container, and deterministically drops/counts an event when the timeline is full. A same-offset replacement remains accepted at capacity.
+- Global compatibility retains scalar values for every existing SFZ controller number. Zone/channel contexts retain only configured dense slots plus small preallocated compatibility slots before an SFZ is loaded. Inheritance uses explicit presence flags, so an intentional member value of zero overrides Global state.
+- The note registry has a parallel preallocated context slot per logical-note slot. Layered voices resolve the same context; Note Off detaches it; generation checks prevent stale access after reuse. Note timelines allow 64 within-block changes plus their delay-zero sentinel, and retired-slot overflow counts remain monotonic.
+- Current `MidiState` C++ compatibility accessors route through these contexts. Voice and modulation callers remain behaviorally unchanged pending the M3 resolved-event/profile adapter boundary.
+
+On the same x86-64 GCC/libstdc++ ABI, `sizeof(MidiState)` falls from 302,064 B at SMPL-93 to 58,592 B in M2 (an 80.6% fixed-size reduction). `sizeof(ExpressionContext)` is 168 B; controller scalar banks and event payload are control-thread heap allocations only where required. The fixed `16 × 642 EventVector` topology and Member first-write allocation no longer exist.
 
 ## Migration sequence
 
