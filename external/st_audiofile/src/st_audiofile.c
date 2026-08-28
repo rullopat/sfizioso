@@ -573,7 +573,7 @@ uint64_t st_read_f32(st_audio_file* af, float* buffer, uint64_t count)
                 if (af->cache.wv.bitrate < 32) {
                     int d = 32 - af->cache.wv.bitrate;
                     for (uint64_t i = 0; i < buf_size; i++) {
-                        buf_i32[i] <<= d;
+                        buf_i32[i] = (int32_t)((uint32_t)buf_i32[i] << d);
                     }
                 }
                 drwav_s32_to_f32(buffer, (drwav_int32*)buf_i32, (size_t)buf_size);
