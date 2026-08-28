@@ -16,7 +16,8 @@
 #include <bitset>
 #include <string>
 #include <vector>
-template <size_t> class BitArray;
+template <size_t>
+class BitArray;
 
 namespace sfz {
 
@@ -29,6 +30,7 @@ class SampleReader;
 struct Region;
 struct Layer;
 class Voice;
+struct SourceAddress;
 
 using CCNamePair = std::pair<uint16_t, std::string>;
 using NoteNamePair = std::pair<uint8_t, std::string>;
@@ -198,7 +200,7 @@ public:
     /**
      * @brief Export a MIDI Name document describing the loaded instrument
      */
-    std::string exportMidnam(absl::string_view model = {}) const;
+    std::string exportMidnam(absl::string_view model = { }) const;
     /**
      * @brief Find the layer which is associated with the given identifier.
      *
@@ -423,6 +425,14 @@ public:
      */
     void programChange(int delay, int program) noexcept;
     /**
+     * @brief Send Program Change on a source channel (0..15).
+     */
+    void programChange(int delay, int channel, int program) noexcept;
+    /**
+     * @brief Internal protocol-neutral Program Change routing seam.
+     */
+    void programChange(int delay, SourceAddress source, int program) noexcept;
+    /**
      * @brief Send a high precision CC automation to the synth
      *
      * @param delay the delay at which the event occurs; this should be lower
@@ -445,7 +455,7 @@ public:
      * @return the default value
      */
     float getDefaultHdcc(int ccNumber);
-   /**
+    /**
      * @brief Send a pitch bend event to the synth
      *
      * @param delay the delay at which the event occurs; this should be lower
@@ -454,7 +464,7 @@ public:
      * @param pitch the pitch value centered between -8192 and 8192
      */
     void pitchWheel(int delay, int pitch) noexcept;
-   /**
+    /**
      * @brief Send a high-precision pitch bend event to the synth
      *
      * @param delay the delay at which the event occurs; this should be lower
@@ -802,8 +812,7 @@ public:
      */
     bool shouldReloadScala();
 
-    struct CallbackBreakdown
-    {
+    struct CallbackBreakdown {
         double dispatch { 0 };
         double renderMethod { 0 };
         double data { 0 };
@@ -893,6 +902,7 @@ public:
     void setBroadcastCallback(sfizz_receive_t* broadcast, void* data);
 
     struct Impl;
+
 private:
     std::unique_ptr<Impl> impl_;
 

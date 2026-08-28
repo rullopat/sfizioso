@@ -14,13 +14,15 @@
 namespace sfz {
 
 Layer::Layer(int regionNumber, absl::string_view defaultPath, const MidiState& midiState)
-    : midiState_(midiState), region_(regionNumber, defaultPath)
+    : midiState_(midiState)
+    , region_(regionNumber, defaultPath)
 {
     initializeActivations();
 }
 
 Layer::Layer(const Region& region, const MidiState& midiState)
-    : midiState_(midiState), region_(region)
+    : midiState_(midiState)
+    , region_(region)
 {
     initializeActivations();
 }
@@ -75,26 +77,31 @@ bool Layer::isSourceChannelEligible(int sourceChannel) const noexcept
         && region_.channelRange.containsWithEnd(sourceChannel + 1);
 }
 
-bool Layer::isSwitchedOn(int sourceChannel) const noexcept
+bool Layer::isSwitchedOn(SourceAddress source) const noexcept
 {
     if (!region_.isChannelRestricted()) {
         return keySwitched_ && previousKeySwitched_ && sequenceSwitched_ && pitchSwitched_
             && programSwitched_ && bpmSwitched_ && aftertouchSwitched_ && ccSwitched_.all();
     }
 
+    const int sourceChannel = source.channel;
     if (!isSourceChannelEligible(sourceChannel))
         return false;
 
     const SourceActivationState& state = (*sourceStates_)[sourceChannel];
+    const bool sourceProgramSwitched = region_.programRange.containsWithEnd(
+        midiState_.getProgram(source));
     return state.keySwitched && state.previousKeySwitched && state.sequenceSwitched
-        && state.pitchSwitched && programSwitched_ && bpmSwitched_
+        && state.pitchSwitched && sourceProgramSwitched && bpmSwitched_
         && state.aftertouchSwitched && state.ccSwitched.all();
 }
 
-bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue, int sourceChannel) noexcept
+bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue,
+    SourceAddress source) noexcept
 {
     ASSERT(velocity >= 0.0f && velocity <= 1.0f);
 
+    const int sourceChannel = source.channel;
     const Region& region = region_;
     if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
         return false;
@@ -114,7 +121,7 @@ bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue, int 
               midiState_.getSourcePolyAftertouch(sourceChannel, noteNumber))
         : region.polyAftertouchRange.containsWithEnd(midiState_.getPolyAftertouch(noteNumber));
 
-    if (!isSwitchedOn(sourceChannel) || !polyAftertouchActive)
+    if (!isSwitchedOn(source) || !polyAftertouchActive)
         return false;
 
     if (!region.triggerOnNote)
@@ -140,10 +147,11 @@ bool Layer::registerNoteOn(int noteNumber, float velocity, float randValue, int 
 }
 
 bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue,
-    int sourceChannel, int expressionChannel, NoteInstanceId noteId) noexcept
+    SourceAddress source, int expressionChannel, NoteInstanceId noteId) noexcept
 {
     ASSERT(velocity >= 0.0f && velocity <= 1.0f);
 
+    const int sourceChannel = source.channel;
     const Region& region = region_;
     if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
         return false;
@@ -153,7 +161,7 @@ bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue,
               midiState_.getSourcePolyAftertouch(sourceChannel, noteNumber))
         : region.polyAftertouchRange.containsWithEnd(midiState_.getPolyAftertouch(noteNumber));
 
-    if (!isSwitchedOn(sourceChannel) || !polyAftertouchActive)
+    if (!isSwitchedOn(source) || !polyAftertouchActive)
         return false;
 
     if (!region.triggerOnNote)
@@ -212,8 +220,7 @@ bool Layer::registerNoteOff(int noteNumber, float velocity, float randValue,
             if (sustainPressed) {
                 delaySustainRelease(noteNumber, noteVelocity, sourceChannel,
                     expressionChannel, noteId);
-            }
-            else
+            } else
                 return true;
         }
     }
@@ -274,8 +281,9 @@ void Layer::updateCCState(int ccNumber, float ccValue, int sourceChannel,
 }
 
 bool Layer::registerCC(int ccNumber, float ccValue, float randValue,
-    int extendedArg, int sourceChannel, int expressionChannel) noexcept
+    int extendedArg, SourceAddress source, int expressionChannel) noexcept
 {
+    const int sourceChannel = source.channel;
     const Region& region = region_;
     if (region.isChannelRestricted() && !isSourceChannelEligible(sourceChannel))
         return false;
@@ -309,7 +317,7 @@ bool Layer::registerCC(int ccNumber, float ccValue, float randValue,
         const float previousValue = region.isChannelRestricted()
             ? midiState_.getSourceCCValue(sourceChannel, ccNumber)
             : midiState_.getCCValue(expressionChannel, ccNumber);
-        if (isSwitchedOn(sourceChannel)
+        if (isSwitchedOn(source)
             && (ccNumber == ExtendedCCs::polyphonicAftertouch
                 || ccValue != previousValue))
             return true;

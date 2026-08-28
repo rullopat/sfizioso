@@ -23,6 +23,19 @@ ExpressionTarget MidiInputAdapter::noteBroadTarget(SourceAddress source) const n
         : ExpressionTarget::global();
 }
 
+bool MidiInputAdapter::acceptProgramChange(SourceAddress source) const noexcept
+{
+    // MIDI 1.0 Mode 3 permits Program Change only on the Manager Channel.
+    return !isMember(source);
+}
+
+RoutingTarget MidiInputAdapter::programTarget(SourceAddress source) const noexcept
+{
+    return mpeEnabled_ && source.group == 0
+        ? RoutingTarget::zone(0)
+        : RoutingTarget::channel(source);
+}
+
 MidiExpressionRoute MidiInputAdapter::resolvePitch(
     int delay, SourceAddress source, float normalizedValue) noexcept
 {
@@ -191,7 +204,8 @@ void MidiInputAdapter::setPitchBendRange(
         if (!seed.hasPitch)
             continue;
         const float range = channel == 0
-            ? managerPitchBendRange_ : memberPitchBendRange_;
+            ? managerPitchBendRange_
+            : memberPitchBendRange_;
         seed.pitchSemitones = seed.normalizedPitch * range;
     }
 }

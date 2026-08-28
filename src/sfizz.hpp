@@ -723,6 +723,14 @@ public:
     void cc(int delay, int channel, int ccNumber, int ccValue) noexcept;
     /** @brief High-precision CC on a specific MIDI channel. */
     void hdcc(int delay, int channel, int ccNumber, float normValue) noexcept;
+    /**
+     * @brief Send source-aware Program Change on a specific MIDI channel.
+     *
+     * With MPE disabled this updates the source context and legacy global
+     * view. In Lower-Zone MPE, Manager input updates the Zone/global view and
+     * Member input is dropped according to Mode 3.
+     */
+    void programChange(int delay, int channel, int program) noexcept;
     /** @brief Send a pitch bend event on a specific MIDI channel (0..15). */
     void pitchWheel(int delay, int channel, int pitch) noexcept;
     /** @brief High-precision pitch bend on a specific MIDI channel. */

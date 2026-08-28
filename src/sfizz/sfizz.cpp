@@ -275,6 +275,11 @@ void sfz::Sfizz::hdcc(int delay, int channel, int ccNumber, float normValue) noe
     synth->synth.hdcc(delay, channel, ccNumber, normValue);
 }
 
+void sfz::Sfizz::programChange(int delay, int channel, int program) noexcept
+{
+    synth->synth.programChange(delay, channel, program);
+}
+
 void sfz::Sfizz::pitchWheel(int delay, int channel, int pitch) noexcept
 {
     synth->synth.pitchWheel(delay, channel, pitch);
@@ -411,7 +416,6 @@ bool sfz::Sfizz::setOversamplingFactor(int) noexcept
     return true;
 }
 
-
 int sfz::Sfizz::getOversamplingFactor() const noexcept
 {
     return 1;
@@ -519,7 +523,7 @@ const std::vector<std::pair<uint16_t, std::string>>& sfz::Sfizz::getCCLabels() c
     return synth->synth.getCCLabels();
 }
 
-void sfz::Sfizz::ClientDeleter::operator()(Client *client) const noexcept
+void sfz::Sfizz::ClientDeleter::operator()(Client* client) const noexcept
 {
     delete client;
 }

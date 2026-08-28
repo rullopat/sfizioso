@@ -140,6 +140,53 @@ constexpr bool operator!=(ExpressionTarget lhs, ExpressionTarget rhs) noexcept
 }
 
 /**
+ * Scope of a non-continuous source-routing event such as Program Change.
+ * Routing never targets a logical note.
+ */
+enum class RoutingScope : uint8_t {
+    Global,
+    Zone,
+    Channel,
+};
+
+struct RoutingTarget {
+    RoutingScope scope { RoutingScope::Global };
+    uint16_t id { 0 };
+
+    static constexpr RoutingTarget global() noexcept
+    {
+        return { RoutingScope::Global, 0 };
+    }
+
+    static constexpr RoutingTarget zone(uint8_t zoneId) noexcept
+    {
+        return { RoutingScope::Zone, zoneId };
+    }
+
+    static constexpr RoutingTarget channel(SourceAddress source) noexcept
+    {
+        return { RoutingScope::Channel,
+            static_cast<uint16_t>((source.group << 4) | source.channel) };
+    }
+
+    constexpr SourceAddress sourceAddress() const noexcept
+    {
+        return { static_cast<uint8_t>((id >> 4) & 0x0f),
+            static_cast<uint8_t>(id & 0x0f) };
+    }
+};
+
+constexpr bool operator==(RoutingTarget lhs, RoutingTarget rhs) noexcept
+{
+    return lhs.scope == rhs.scope && lhs.id == rhs.id;
+}
+
+constexpr bool operator!=(RoutingTarget lhs, RoutingTarget rhs) noexcept
+{
+    return !(lhs == rhs);
+}
+
+/**
  * Controller namespaces must remain distinct when protocols are normalized.
  */
 enum class ExpressionControlNamespace : uint8_t {

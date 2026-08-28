@@ -7,6 +7,7 @@
 #include "MidiState.h"
 #include "utility/Macros.h"
 #include "utility/Debug.h"
+#include <algorithm>
 #include <limits>
 
 sfz::MidiState::MidiState()
@@ -377,7 +378,8 @@ bool sfz::MidiState::expressionEvent(
         switch (event.control.nameSpace) {
         case ExpressionControlNamespace::MidiCC:
             sfizzCC = event.control.number < 128
-                ? static_cast<int>(event.control.number) : -1;
+                ? static_cast<int>(event.control.number)
+                : -1;
             break;
         case ExpressionControlNamespace::SfzExtendedCC:
             sfizzCC = event.control.number;
@@ -818,9 +820,63 @@ int sfz::MidiState::getProgram() const noexcept
     return currentProgram;
 }
 
+int sfz::MidiState::getProgram(SourceAddress source) const noexcept
+{
+    if (source.group >= 16 || source.channel >= 16)
+        return currentProgram;
+    return sourcePrograms_[static_cast<size_t>(source.group) * 16 + source.channel];
+}
+
+int sfz::MidiState::getProgram(RoutingTarget target) const noexcept
+{
+    switch (target.scope) {
+    case RoutingScope::Global:
+        return currentProgram;
+    case RoutingScope::Zone:
+        return target.id < zonePrograms_.size()
+            ? zonePrograms_[target.id]
+            : currentProgram;
+    case RoutingScope::Channel:
+        return getProgram(target.sourceAddress());
+    }
+    return currentProgram;
+}
+
 void sfz::MidiState::programChangeEvent(int delay, int program) noexcept
 {
     UNUSED(delay);
     ASSERT(program >= 0 && program <= 127);
     currentProgram = program;
+    zonePrograms_.fill(program);
+    sourcePrograms_.fill(program);
+}
+
+void sfz::MidiState::programChangeEvent(
+    int delay, RoutingTarget target, int program) noexcept
+{
+    UNUSED(delay);
+    ASSERT(program >= 0 && program <= 127);
+
+    switch (target.scope) {
+    case RoutingScope::Global:
+        programChangeEvent(delay, program);
+        return;
+    case RoutingScope::Zone: {
+        if (target.id >= zonePrograms_.size())
+            return;
+        currentProgram = program;
+        zonePrograms_[target.id] = program;
+        const size_t first = static_cast<size_t>(target.id) * 16;
+        std::fill_n(sourcePrograms_.begin() + first, 16, program);
+        return;
+    }
+    case RoutingScope::Channel: {
+        const SourceAddress source = target.sourceAddress();
+        if (source.group >= 16 || source.channel >= 16)
+            return;
+        currentProgram = program;
+        sourcePrograms_[static_cast<size_t>(source.group) * 16 + source.channel] = program;
+        return;
+    }
+    }
 }

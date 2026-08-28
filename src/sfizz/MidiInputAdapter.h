@@ -42,6 +42,10 @@ public:
 
     ExpressionTarget noteBroadTarget(SourceAddress source) const noexcept;
 
+    /** Resolve accepted Program Change to routing state, never expression. */
+    bool acceptProgramChange(SourceAddress source) const noexcept;
+    RoutingTarget programTarget(SourceAddress source) const noexcept;
+
     bool acceptControl(SourceAddress source, int ccNumber) noexcept;
     bool acceptPolyPressure(SourceAddress source) noexcept;
     void observeRpnControl(

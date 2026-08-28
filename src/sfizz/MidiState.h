@@ -13,16 +13,14 @@
 #include "ExpressionEvent.h"
 #include "Range.h"
 
-namespace sfz
-{
+namespace sfz {
 /**
  * @brief Holds the current "MIDI state", meaning the known state of all CCs
  * currently, as well as the note velocities that triggered the currently
  * pressed notes.
  *
  */
-class MidiState
-{
+class MidiState {
 public:
     MidiState();
 
@@ -247,13 +245,21 @@ public:
      * @return int
      */
     int getProgram() const noexcept;
+    int getProgram(SourceAddress source) const noexcept;
+    int getProgram(RoutingTarget target) const noexcept;
     /**
-     * @brief Register a program change event
+     * @brief Register a global compatibility Program Change.
      *
-     * @param delay
-     * @param program
+     * Global changes update every bounded source/zone routing context.
      */
     void programChangeEvent(int delay, int program) noexcept;
+    /**
+     * @brief Register Program Change on an explicit non-note routing target.
+     *
+     * Channel targets also update the legacy global view while retaining
+     * independent source state. Zone targets update every source in the zone.
+     */
+    void programChangeEvent(int delay, RoutingTarget target, int program) noexcept;
 
     /**
      * @brief Register a CC event
@@ -392,21 +398,20 @@ public:
     float getMPEBendRangeForChannel(int channel) const noexcept;
 
 private:
-
     int activeNotes { 0 };
 
     /**
      * @brief Stores the note on times.
      *
      */
-    MidiNoteArray<unsigned> noteOnTimes { {} };
+    MidiNoteArray<unsigned> noteOnTimes { { } };
 
     /**
      * @brief Stores the note off times.
      *
      */
 
-    MidiNoteArray<unsigned> noteOffTimes { {} };
+    MidiNoteArray<unsigned> noteOffTimes { { } };
 
     /**
      * @brief Store the note states
@@ -480,9 +485,15 @@ private:
     const EventVector nullEvent { { 0, 0.0f } };
 
     /**
-     * @brief Current midi program
+     * @brief Bounded Program Change routing state.
+     *
+     * The legacy global scalar is retained. Sixteen explicit groups each own
+     * sixteen source-channel slots; this is routing state, not expression
+     * controller storage. Zone ids currently map to their protocol group.
      */
     int currentProgram { 0 };
+    std::array<int, 16> zonePrograms_ { { } };
+    std::array<int, 256> sourcePrograms_ { { } };
 
     float sampleRate { config::defaultSampleRate };
     int samplesPerBlock { config::defaultSamplesPerBlock };
