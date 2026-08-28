@@ -27,6 +27,7 @@ option_ex(ENABLE_LTO                "Enable Link Time Optimization" ON)
 option_ex(SFIZZ_JACK                "Enable JACK stand-alone build" CMAKE_SYSTEM_NAME STREQUAL "Linux")
 option_ex(SFIZZ_RENDER              "Enable renderer of SMF files" ON)
 option_ex(SFIZZ_BENCHMARKS          "Enable benchmarks build" OFF)
+option_ex(SFIZZ_MIDI_DISPATCH_BENCHMARK "Enable standalone MIDI dispatch benchmark" OFF)
 option_ex(SFIZZ_TESTS               "Enable tests build" OFF)
 option_ex(SFIZZ_DEMOS               "Enable feature demos build" OFF)
 option_ex(SFIZZ_DEVTOOLS            "Enable developer tools build" OFF)
@@ -76,6 +77,10 @@ add_subdirectory(clients)
 
 if(SFIZZ_BENCHMARKS)
     add_subdirectory(benchmarks)
+endif()
+
+if(SFIZZ_MIDI_DISPATCH_BENCHMARK)
+    add_subdirectory(benchmarks/midi_dispatch)
 endif()
 
 if(SFIZZ_TESTS)
