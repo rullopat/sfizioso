@@ -87,4 +87,14 @@ bool NoteRegistry::contains(NoteInstanceId id) const noexcept
         && slots_[id.index].generation == id.generation;
 }
 
+bool NoteRegistry::matches(NoteInstanceId id, SourceAddress source,
+    int noteNumber) const noexcept
+{
+    if (!contains(id))
+        return false;
+    const Slot& slot = slots_[id.index];
+    return slot.source == source
+        && (noteNumber < 0 || slot.noteNumber == noteNumber);
+}
+
 } // namespace sfz

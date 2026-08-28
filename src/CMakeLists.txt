@@ -71,6 +71,8 @@ set(SFIZZ_HEADERS
     sfizz/EGDescription.h
     sfizz/EQDescription.h
     sfizz/ExpressionContext.h
+    sfizz/ExpressionEvent.h
+    sfizz/ExpressionEventDispatcher.h
     sfizz/EQPool.h
     sfizz/FileId.h
     sfizz/FileMetadata.h
@@ -114,6 +116,7 @@ set(SFIZZ_HEADERS
     sfizz/SIMDConfig.h
     sfizz/SIMDHelpers.h
     sfizz/MidiIdentity.h
+    sfizz/MidiInputAdapter.h
     sfizz/NoteRegistry.h
     sfizz/SisterVoiceRing.h
     sfizz/Smoothers.h
@@ -143,12 +146,14 @@ set(SFIZZ_SOURCES
     sfizz/Voice.cpp
     sfizz/ScopedFTZ.cpp
     sfizz/MidiState.cpp
+    sfizz/MidiInputAdapter.cpp
     sfizz/NoteRegistry.cpp
     sfizz/Oversampler.cpp
     sfizz/ADSREnvelope.cpp
     sfizz/SfzFilter.cpp
     sfizz/Curve.cpp
     sfizz/ExpressionContext.cpp
+    sfizz/ExpressionEventDispatcher.cpp
     sfizz/Smoothers.cpp
     sfizz/Wavetables.cpp
     sfizz/Tuning.cpp

@@ -26,11 +26,11 @@ void ChannelAftertouchSource::generate(const ModKey& sourceKey, NumericId<Voice>
 {
     UNUSED(sourceKey);
     Voice* voice = manager_.getVoiceById(voiceId);
-    // MPE 1.0 §2.2.7: once released, the voice stops responding to
-    // Channel Pressure on its Member Channel; Manager-Channel CP still
-    // affects the release tail.
-    const int channel = voice ? voice->expressionChannel() : 0;
-    const EventVector& events = midiState_.getChannelAftertouchEvents(channel);
+    const TriggerEvent event = voice
+        ? voice->getTriggerEvent()
+        : TriggerEvent { TriggerEventType::CC, 0, 0.0f };
+    const EventVector& events = midiState_.getVoicePressureEvents(
+        event.expressionTarget, event.noteId);
     linearEnvelope(events, buffer, [](float x) { return x; });
 }
 

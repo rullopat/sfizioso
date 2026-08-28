@@ -244,9 +244,13 @@ void sfz::MidiState::configureExpressionControls(
     // channel timelines are exactly the controls consumed by the SFZ.
     std::array<bool, config::numCCs> profileControllers = usedControllers;
     profileControllers[74] = true;
+    for (int cc = 0; cc < config::numCCs; ++cc)
+        noteExpressionControllers_.set(cc, profileControllers[cc]);
     lowerZoneExpressionContext_.configureSfizzControllers(profileControllers);
     for (ExpressionContext& context : channelExpressionContexts_)
         context.configureSfizzControllers(profileControllers);
+    for (NoteExpressionSlot& slot : noteExpressionSlots_)
+        slot.context.configureSfizzControllers(profileControllers);
 }
 
 void sfz::MidiState::configureNoteExpressionContexts(size_t capacity)
@@ -254,9 +258,13 @@ void sfz::MidiState::configureNoteExpressionContexts(size_t capacity)
     noteExpressionSlots_.clear();
     retiredNoteExpressionOverflowCount_ = 0;
     noteExpressionSlots_.resize(capacity);
+    std::array<bool, config::numCCs> noteControllers { };
+    for (int cc = 0; cc < config::numCCs; ++cc)
+        noteControllers[cc] = noteExpressionControllers_.test(cc);
     for (NoteExpressionSlot& slot : noteExpressionSlots_) {
         slot.context.configure(
             0, 0, noteTimelineEvents, /*retainAllControllerScalars=*/false);
+        slot.context.configureSfizzControllers(noteControllers);
         slot.generation = 0;
         slot.active = false;
     }
@@ -286,6 +294,15 @@ void sfz::MidiState::clearNoteExpressionContexts() noexcept
 {
     for (NoteExpressionSlot& slot : noteExpressionSlots_)
         slot.active = false;
+}
+
+void sfz::MidiState::resetScopedExpressionContexts() noexcept
+{
+    lowerZoneExpressionContext_.reset();
+    for (ExpressionContext& context : channelExpressionContexts_)
+        context.reset();
+    for (NoteExpressionSlot& slot : noteExpressionSlots_)
+        slot.context.reset();
 }
 
 sfz::ExpressionContext& sfz::MidiState::compatibilityContext(int channel) noexcept
@@ -333,6 +350,118 @@ const sfz::ExpressionContext* sfz::MidiState::getExpressionContext(
     ExpressionTarget target) const noexcept
 {
     return const_cast<MidiState*>(this)->getExpressionContext(target);
+}
+
+bool sfz::MidiState::expressionEvent(
+    const ResolvedExpressionEvent& event) noexcept
+{
+    ExpressionContext* context = getExpressionContext(event.target);
+    if (context == nullptr)
+        return false;
+
+    switch (event.kind) {
+    case ExpressionEventKind::LegacyPitch:
+        if (event.target.scope != ExpressionScope::Global)
+            return false;
+        return context->pitchEvent(event.delay, event.value);
+    case ExpressionEventKind::Pitch:
+        if (event.target.scope == ExpressionScope::Global)
+            return false;
+        return context->pitchEvent(event.delay, event.value);
+    case ExpressionEventKind::Pressure:
+        return context->pressureEvent(event.delay, event.value);
+    case ExpressionEventKind::Timbre:
+        return context->timbreEvent(event.delay, event.value);
+    case ExpressionEventKind::Control: {
+        int sfizzCC = -1;
+        switch (event.control.nameSpace) {
+        case ExpressionControlNamespace::MidiCC:
+            sfizzCC = event.control.number < 128
+                ? static_cast<int>(event.control.number) : -1;
+            break;
+        case ExpressionControlNamespace::SfzExtendedCC:
+            sfizzCC = event.control.number;
+            break;
+        case ExpressionControlNamespace::Midi2Registered:
+        case ExpressionControlNamespace::Midi2Assignable:
+            return false;
+        }
+        return context->controllerEvent(event.delay, sfizzCC, event.value);
+    }
+    case ExpressionEventKind::PolyPressure:
+        return context->polyPressureEvent(
+            event.delay, event.noteNumber, event.value);
+    }
+    return false;
+}
+
+const sfz::EventVector& sfz::MidiState::getVoiceCCEvents(
+    ExpressionTarget broadTarget, NoteInstanceId noteId, int ccNumber) const noexcept
+{
+    if (const ExpressionContext* note = getExpressionContext(
+            ExpressionTarget::note(noteId))) {
+        if (note->hasController(ccNumber)) {
+            if (const EventVector* events = note->controllerEvents(ccNumber))
+                return *events;
+        }
+    }
+    if (const ExpressionContext* broad = getExpressionContext(broadTarget)) {
+        if (broad->hasController(ccNumber)) {
+            if (const EventVector* events = broad->controllerEvents(ccNumber))
+                return *events;
+        }
+    }
+    return getCCEvents(ccNumber);
+}
+
+const sfz::EventVector& sfz::MidiState::getVoicePressureEvents(
+    ExpressionTarget broadTarget, NoteInstanceId noteId) const noexcept
+{
+    if (const ExpressionContext* note = getExpressionContext(
+            ExpressionTarget::note(noteId))) {
+        if (note->hasPressure())
+            return note->pressureEvents();
+    }
+    if (const ExpressionContext* broad = getExpressionContext(broadTarget)) {
+        if (broad->hasPressure())
+            return broad->pressureEvents();
+    }
+    return getChannelAftertouchEvents();
+}
+
+const sfz::EventVector& sfz::MidiState::getVoicePolyPressureEvents(
+    ExpressionTarget broadTarget, NoteInstanceId noteId,
+    int noteNumber) const noexcept
+{
+    if (const ExpressionContext* note = getExpressionContext(
+            ExpressionTarget::note(noteId))) {
+        if (note->hasPolyPressure(noteNumber)) {
+            if (const EventVector* events = note->polyPressureEvents(noteNumber))
+                return *events;
+        }
+    }
+    if (const ExpressionContext* broad = getExpressionContext(broadTarget)) {
+        if (broad->hasPolyPressure(noteNumber)) {
+            if (const EventVector* events = broad->polyPressureEvents(noteNumber))
+                return *events;
+        }
+    }
+    return getPolyAftertouchEvents(noteNumber);
+}
+
+const sfz::EventVector& sfz::MidiState::getVoiceBroadPitchEvents(
+    ExpressionTarget broadTarget) const noexcept
+{
+    const ExpressionContext* context = getExpressionContext(broadTarget);
+    return context != nullptr ? context->pitchEvents() : nullEvent;
+}
+
+const sfz::EventVector& sfz::MidiState::getVoiceNotePitchEvents(
+    NoteInstanceId noteId) const noexcept
+{
+    const ExpressionContext* context = getExpressionContext(
+        ExpressionTarget::note(noteId));
+    return context != nullptr ? context->pitchEvents() : nullEvent;
 }
 
 uint64_t sfz::MidiState::getExpressionOverflowCount() const noexcept

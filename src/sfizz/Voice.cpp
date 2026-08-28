@@ -194,12 +194,7 @@ struct Voice::Impl
      */
     bool released() const noexcept;
 
-    /**
-     * @brief MPE 1.0 §2.2.6 / §2.2.7 / §2.2.8 released-note expression
-     * filter — see Voice::expressionChannel for semantics. Internal
-     * Voice::Impl mirror so per-block render code can call it without a
-     * round-trip through the public surface.
-     */
+    /** Compatibility mirror for Voice::expressionChannel(). */
     int expressionChannel() const noexcept;
 
     /**
@@ -240,12 +235,9 @@ struct Voice::Impl
 
     TriggerEvent triggerEvent_;
     /**
-     * @brief MIDI channel (0..15) the voice was triggered on. Used to
-     * route per-voice modulation reads to the correct channel slot in
-     * MidiState. Default 0 (master) until channel-aware noteOn dispatch
-     * is added; populating this will let voices respond independently
-     * to per-note pitch bend / CC / aftertouch when MPE input is split
-     * across member channels.
+     * @brief Compatibility MIDI expression channel retained for voice
+     * stealing, Note Off matching and the public diagnostic accessor.
+     * Modulation reads use TriggerEvent::expressionTarget and noteId.
      */
     int triggerChannel_ { 0 };
     absl::optional<int> triggerDelay_;
@@ -538,21 +530,27 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
     impl.sampleSize_ = impl.sampleEnd_- impl.sourcePosition_ - 1;
     impl.bendSmoother_.setSmoothing(region.bendSmooth, impl.sampleRate_);
     {
-        // Same master vs. member channel distinction as in pitchEnvelope:
-        // master uses region bend_up/down. Member channels combine their own
-        // bend (per-note range) with master bend (master range) per MPE 1.0.
-        float initialCents;
-        if (impl.triggerChannel_ == 0) {
-            initialCents = region.getBendInCents(midiState.getPitchBend(0));
+        // The adapter resolves profile pitch into semitones for every broad
+        // target except Global, whose normalized value intentionally retains
+        // the SFZ region bend_up/bend_down compatibility contract.
+        const ExpressionTarget broad = impl.triggerEvent_.expressionTarget;
+        const ExpressionContext* broadContext =
+            midiState.getExpressionContext(broad);
+        float initialCents = 0.0f;
+        if (broad.scope == ExpressionScope::Global) {
+            const float legacyPitch = broadContext
+                ? broadContext->pitchValue() : 0.0f;
+            initialCents = region.getBendInCents(legacyPitch);
         }
         else {
-            const float perNoteBend = midiState.getPitchBendRaw(impl.triggerChannel_);
-            const float masterBend = midiState.getPitchBendRaw(0);
-            const float perNoteCents =
-                midiState.getMPEBendRangeForChannel(impl.triggerChannel_) * 100.0f;
-            const float masterCents =
-                midiState.getMPEBendRangeForChannel(0) * 100.0f;
-            initialCents = perNoteBend * perNoteCents + masterBend * masterCents;
+            if (broadContext && broadContext->hasPitch())
+                initialCents += broadContext->pitchValue() * 100.0f;
+            if (const ExpressionContext* noteContext =
+                    midiState.getExpressionContext(ExpressionTarget::note(
+                        impl.triggerEvent_.noteId))) {
+                if (noteContext->hasPitch())
+                    initialCents += noteContext->pitchValue() * 100.0f;
+            }
         }
         impl.bendSmoother_.reset(initialCents);
     }
@@ -892,13 +890,15 @@ void Voice::Impl::resetCrossfades() noexcept
     MidiState& midiState = resources_.getMidiState();
 
     for (const auto& mod : region_->crossfadeCCInRange) {
-        const auto value = midiState.getCCValue(triggerChannel_, mod.cc);
-        xfadeValue *= crossfadeIn(mod.data, value, xfCurve);
+        const EventVector& events = midiState.getVoiceCCEvents(
+            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
+        xfadeValue *= crossfadeIn(mod.data, events.back().value, xfCurve);
     }
 
     for (const auto& mod : region_->crossfadeCCOutRange) {
-        const auto value = midiState.getCCValue(triggerChannel_, mod.cc);
-        xfadeValue *= crossfadeOut(mod.data, value, xfCurve);
+        const EventVector& events = midiState.getVoiceCCEvents(
+            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
+        xfadeValue *= crossfadeOut(mod.data, events.back().value, xfCurve);
     }
 
     xfadeSmoother_.reset(xfadeValue);
@@ -920,11 +920,10 @@ void Voice::Impl::applyCrossfades(absl::Span<float> modulationSpan) noexcept
 
     fill<float>(*xfadeSpan, 1.0f);
 
-    const int xfadeChannel = expressionChannel();
-
     bool canShortcut = true;
     for (const auto& mod : region_->crossfadeCCInRange) {
-        const auto& events = midiState.getCCEvents(xfadeChannel, mod.cc);
+        const auto& events = midiState.getVoiceCCEvents(
+            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
         canShortcut &= (events.size() == 1);
         linearEnvelope(events, *tempSpan, [&](float x) {
             return crossfadeIn(mod.data, x, xfCurve);
@@ -933,7 +932,8 @@ void Voice::Impl::applyCrossfades(absl::Span<float> modulationSpan) noexcept
     }
 
     for (const auto& mod : region_->crossfadeCCOutRange) {
-        const auto& events = midiState.getCCEvents(xfadeChannel, mod.cc);
+        const auto& events = midiState.getVoiceCCEvents(
+            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
         canShortcut &= (events.size() == 1);
         linearEnvelope(events, *tempSpan, [&](float x) {
             return crossfadeOut(mod.data, x, xfCurve);
@@ -2055,11 +2055,11 @@ void Voice::Impl::pitchEnvelope(absl::Span<float> pitchSpan) noexcept
     const size_t numFrames = pitchSpan.size();
 
     const MidiState& midiState = resources_.getMidiState();
-    const bool isMaster = (triggerChannel_ == 0);
+    const ExpressionTarget broad = triggerEvent_.expressionTarget;
 
-    if (isMaster) {
-        // Legacy / non-MPE path: single events vector, region bend_up/down.
-        const EventVector& events = midiState.getPitchEvents(triggerChannel_);
+    if (broad.scope == ExpressionScope::Global) {
+        const EventVector& events =
+            midiState.getVoiceBroadPitchEvents(broad);
         const auto bendLambda = [this](float bend) {
             return region_->getBendInCents(bend);
         };
@@ -2069,64 +2069,34 @@ void Voice::Impl::pitchEnvelope(absl::Span<float> pitchSpan) noexcept
             linearEnvelope(events, pitchSpan, bendLambda);
     }
     else {
-        // MPE 1.0: total bend = master_bend × master_range
-        //                    + per_note_bend × per_note_range.
-        // Read the two channels separately (no fallback) so the master
-        // contribution is preserved even after the member channel's events
-        // were populated by an earlier per-note bend. Either vector may be
-        // empty (member channels are populated lazily on first write), so
-        // guard the linearEnvelope calls — it asserts events.size() > 0.
-        //
-        // MPE 1.0 §2.2.6: once released, the voice must stop reacting to
-        // Member-Channel pitch bend (the controller will reuse the channel
-        // for the next finger) but should still honour Manager-Channel
-        // pitch bend. Skip the per-note read entirely when released —
-        // expressionChannel() returns 0 in that state but reading the
-        // master events as "per-note" would double-apply the master bend,
-        // so zero the per-note contribution explicitly.
-        const bool releasedMember = released();
-        const float perNoteCents = releasedMember ? 0.0f
-            : midiState.getMPEBendRangeForChannel(triggerChannel_) * 100.0f;
-        const float masterCents =
-            midiState.getMPEBendRangeForChannel(0) * 100.0f;
+        // Profile adapters resolve broad and note pitch to semitones. Core
+        // rendering composes these additively without knowing whether they
+        // originated as MPE Member/Manager or MIDI 2.0 per-note messages.
+        const auto semitonesToCents = [](float semitones) {
+            return semitones * 100.0f;
+        };
+        const EventVector& broadEvents =
+            midiState.getVoiceBroadPitchEvents(broad);
+        if (region_->bendStep > 1.0f)
+            linearEnvelope(
+                broadEvents, pitchSpan, semitonesToCents, region_->bendStep);
+        else
+            linearEnvelope(broadEvents, pitchSpan, semitonesToCents);
 
-        const EventVector& masterEvents = midiState.getPitchEventsRaw(0);
-
-        // Per-note contribution into pitchSpan.
-        if (!releasedMember) {
-            const EventVector& perNoteEvents = midiState.getPitchEventsRaw(triggerChannel_);
-            if (!perNoteEvents.empty()) {
-                const auto perNoteLambda = [perNoteCents](float bend) {
-                    return bend * perNoteCents;
-                };
-                if (region_->bendStep > 1.0f)
-                    linearEnvelope(perNoteEvents, pitchSpan, perNoteLambda, region_->bendStep);
-                else
-                    linearEnvelope(perNoteEvents, pitchSpan, perNoteLambda);
-            }
-            else {
-                std::fill(pitchSpan.begin(), pitchSpan.end(), 0.0f);
-            }
-        }
-        else {
-            std::fill(pitchSpan.begin(), pitchSpan.end(), 0.0f);
-        }
-
-        // Master contribution into a scratch buffer, then summed onto pitchSpan.
-        if (!masterEvents.empty()) {
-            auto& bufferPool = resources_.getBufferPool();
-            auto scratch = bufferPool.getBuffer(numFrames);
+        const EventVector& noteEvents =
+            midiState.getVoiceNotePitchEvents(triggerEvent_.noteId);
+        const ExpressionContext* noteContext = midiState.getExpressionContext(
+            ExpressionTarget::note(triggerEvent_.noteId));
+        if (noteContext && noteContext->hasPitch()) {
+            auto scratch = resources_.getBufferPool().getBuffer(numFrames);
             if (scratch) {
-                absl::Span<float> masterSpan = *scratch;
-                const auto masterLambda = [masterCents](float bend) {
-                    return bend * masterCents;
-                };
                 if (region_->bendStep > 1.0f)
-                    linearEnvelope(masterEvents, masterSpan, masterLambda, region_->bendStep);
+                    linearEnvelope(noteEvents, *scratch,
+                        semitonesToCents, region_->bendStep);
                 else
-                    linearEnvelope(masterEvents, masterSpan, masterLambda);
+                    linearEnvelope(noteEvents, *scratch, semitonesToCents);
                 for (size_t i = 0; i < numFrames; ++i)
-                    pitchSpan[i] += masterSpan[i];
+                    pitchSpan[i] += (*scratch)[i];
             }
         }
     }

@@ -33,6 +33,13 @@ public:
     uint64_t overflowCount() const noexcept { return overflowCount_; }
 
     bool contains(NoteInstanceId id) const noexcept;
+    bool matches(NoteInstanceId id, SourceAddress source,
+        int noteNumber = -1) const noexcept;
+
+    /** Visit active matches without allocating or exposing registry storage. */
+    template <class Visitor>
+    void forEachActive(SourceAddress source, int noteNumber,
+        Visitor&& visitor) const noexcept;
 
 private:
     struct Slot {
@@ -48,5 +55,20 @@ private:
     size_t activeCount_ { 0 };
     uint64_t overflowCount_ { 0 };
 };
+
+template <class Visitor>
+void NoteRegistry::forEachActive(SourceAddress source, int noteNumber,
+    Visitor&& visitor) const noexcept
+{
+    for (size_t i = 0; i < slots_.size(); ++i) {
+        const Slot& slot = slots_[i];
+        if (!slot.active || slot.source != source)
+            continue;
+        if (noteNumber >= 0 && slot.noteNumber != noteNumber)
+            continue;
+        visitor(NoteInstanceId {
+            static_cast<uint16_t>(i), slot.generation });
+    }
+}
 
 } // namespace sfz

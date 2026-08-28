@@ -1,6 +1,6 @@
 # Protocol-neutral MIDI routing and expression architecture
 
-Status: design draft for SMPL-97 and SMPL-99.
+Status: SMPL-97 M1–M3 implemented; SMPL-99 remains planned.
 
 ## Purpose
 
@@ -145,9 +145,18 @@ M2 now replaces the expression-vector topology while preserving the M1 identity 
 - Every timeline is allocated/reserved on the control thread. Realtime insertion is sorted and bounded, never grows a container, and deterministically drops/counts an event when the timeline is full. A same-offset replacement remains accepted at capacity.
 - Global compatibility retains scalar values for every existing SFZ controller number. Zone/channel contexts retain only configured dense slots plus small preallocated compatibility slots before an SFZ is loaded. Inheritance uses explicit presence flags, so an intentional member value of zero overrides Global state.
 - The note registry has a parallel preallocated context slot per logical-note slot. Layered voices resolve the same context; Note Off detaches it; generation checks prevent stale access after reuse. Note timelines allow 64 within-block changes plus their delay-zero sentinel, and retired-slot overflow counts remain monotonic.
-- Current `MidiState` C++ compatibility accessors route through these contexts. Voice and modulation callers remain behaviorally unchanged pending the M3 resolved-event/profile adapter boundary.
+- Current `MidiState` C++ compatibility accessors continue to route through these contexts for source compatibility.
 
-On the same x86-64 GCC/libstdc++ ABI, `sizeof(MidiState)` falls from 302,064 B at SMPL-93 to 58,592 B in M2 (an 80.6% fixed-size reduction). `sizeof(ExpressionContext)` is 168 B; controller scalar banks and event payload are control-thread heap allocations only where required. The fixed `16 × 642 EventVector` topology and Member first-write allocation no longer exist.
+M3 now owns transport/profile policy at the input boundary:
+
+- `MidiInputAdapter` owns Lower-Zone MPE Manager/Member classification, Manager-only and Poly Pressure filters, RPN/MCM parsing, bend ranges and conversion to canonical semitones, plus compact pre-note pitch/pressure/timbre seeds.
+- Existing MIDI 1.0 entry points emit `ResolvedExpressionEvent` values with explicit Global, Zone, Channel or Note targets. MPE Member expression broadcasts to every active logical note on that Member Channel rather than selecting an arbitrary voice.
+- `TriggerEvent::expressionTarget` records the broad expression scope selected at Note On. Note state composes above it while active and generation-safe detachment on Note Off leaves release tails on their Zone/Global scope.
+- Voice pitch, crossfades, controller modulation, Channel Pressure and Poly Pressure consume explicit broad/note contexts. They no longer branch on MPE state or select expression through `triggerChannel_`; `Voice::expressionChannel()` remains only as a source-compatible diagnostic.
+- `AddressedNoteExpressionEvent` is the future UMP adapter seam. Group/channel/note addressing broadcasts deterministically to every active match unless a valid `NoteInstanceId` selects one generation.
+- All adapter and addressed-note dispatch paths are bounded, allocation-free and lock-free.
+
+On the same x86-64 GCC/libstdc++ ABI, `sizeof(MidiState)` fell from 302,064 B at SMPL-93 to 58,592 B in M2. M3 is 58,656 B after adding the 512-bit note-controller reconfiguration mask (80.6% below SMPL-93); `TriggerEvent` is 32 B after adding its explicit broad target. `ExpressionContext` remains 168 B. Controller scalar banks and event payload are control-thread heap allocations only where required. The fixed `16 × 642 EventVector` topology and Member first-write allocation no longer exist.
 
 ## Migration sequence
 

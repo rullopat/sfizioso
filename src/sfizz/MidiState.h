@@ -10,6 +10,7 @@
 #include <vector>
 #include "CCMap.h"
 #include "ExpressionContext.h"
+#include "ExpressionEvent.h"
 #include "Range.h"
 
 namespace sfz
@@ -114,8 +115,27 @@ public:
     void beginNoteExpression(NoteInstanceId noteId) noexcept;
     void endNoteExpression(NoteInstanceId noteId) noexcept;
     void clearNoteExpressionContexts() noexcept;
+    void resetScopedExpressionContexts() noexcept;
     ExpressionContext* getExpressionContext(ExpressionTarget target) noexcept;
     const ExpressionContext* getExpressionContext(ExpressionTarget target) const noexcept;
+
+    /** Apply one transport-neutral event to its explicit expression target. */
+    bool expressionEvent(const ResolvedExpressionEvent& event) noexcept;
+
+    /**
+     * Resolve the explicit Note → broad target → Global inheritance policy
+     * for voice and modulation consumers. Note expression disappears
+     * automatically once its generation-safe context is detached.
+     */
+    const EventVector& getVoiceCCEvents(ExpressionTarget broadTarget,
+        NoteInstanceId noteId, int ccNumber) const noexcept;
+    const EventVector& getVoicePressureEvents(ExpressionTarget broadTarget,
+        NoteInstanceId noteId) const noexcept;
+    const EventVector& getVoicePolyPressureEvents(ExpressionTarget broadTarget,
+        NoteInstanceId noteId, int noteNumber) const noexcept;
+    const EventVector& getVoiceBroadPitchEvents(ExpressionTarget broadTarget) const noexcept;
+    const EventVector& getVoiceNotePitchEvents(NoteInstanceId noteId) const noexcept;
+
     uint64_t getExpressionOverflowCount() const noexcept;
     /**
      * @brief Set the sample rate. If you do not call it it is initialized
@@ -432,6 +452,7 @@ private:
         bool active { false };
     };
     std::vector<NoteExpressionSlot> noteExpressionSlots_;
+    std::bitset<config::numCCs> noteExpressionControllers_;
     uint64_t retiredNoteExpressionOverflowCount_ { 0 };
 
     struct SourceNoteState {
