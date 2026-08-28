@@ -56,9 +56,9 @@ build_and_run() {
         -DCMAKE_CXX_FLAGS=-include\ cstdint \
         -DSFIZZ_MIDI_DISPATCH_BENCHMARK=ON \
         -DSFIZZ_TESTS=OFF -DSFIZZ_JACK=OFF -DSFIZZ_RENDER=OFF \
-        -DSFIZZ_SHARED=OFF >"$output_dir/$label-build.log"
+        -DSFIZZ_SHARED=OFF >"$work_root/$label-build.log"
     cmake --build "$build" --target sfizz_midi_dispatch_benchmark -j2 \
-        >>"$output_dir/$label-build.log"
+        >>"$work_root/$label-build.log"
     "$build/library/bin/sfizz_midi_dispatch_benchmark" \
         --iterations "$iterations" >"$output_dir/$label.csv"
 }

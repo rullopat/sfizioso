@@ -1,6 +1,6 @@
 # Protocol-neutral MIDI routing and expression architecture
 
-Status: SMPL-97 M1–M3 implemented; SMPL-99 remains planned.
+Status: SMPL-97 complete; scoped Program Change implemented for SMPL-99.
 
 ## Purpose
 
@@ -125,6 +125,16 @@ Omni regions evaluate the global program view. Effectively channel-restricted re
 
 Program state is routing state, not note expression, and must not be inserted into expression controller banks.
 
+The implementation uses a compact `RoutingTarget` restricted to Global, Zone
+and Channel scopes. `MidiState` retains one global value, 16 bounded zone
+values and 256 explicit group/channel values. The original channel-less API
+broadcasts to every routing context. A channel target updates that source and
+the legacy global view; a zone target updates the zone, global view and all 16
+sources in the corresponding group. Effectively channel-restricted layers read
+the triggering `SourceAddress`, while omni layers retain their existing global
+activation flag. Lower-Zone MPE Member Program Change is rejected by
+`MidiInputAdapter` before any routing state changes.
+
 ## Implementation status
 
 The first M1 milestone now establishes identity without moving expression storage:
@@ -157,6 +167,16 @@ M3 now owns transport/profile policy at the input boundary:
 - All adapter and addressed-note dispatch paths are bounded, allocation-free and lock-free.
 
 On the same x86-64 GCC/libstdc++ ABI, `sizeof(MidiState)` fell from 302,064 B at SMPL-93 to 58,592 B in M2. M3 is 58,656 B after adding the 512-bit note-controller reconfiguration mask (80.6% below SMPL-93); `TriggerEvent` is 32 B after adding its explicit broad target. `ExpressionContext` remains 168 B. Controller scalar banks and event payload are control-thread heap allocations only where required. The fixed `16 × 642 EventVector` topology and Member first-write allocation no longer exist.
+
+The committed standalone dispatch benchmark compares SMPL-93 `a713070d` with
+scoped-routing `f8557e04` using the same 256-frame workloads over 1, 100 and
+1,000 regions and 1, 16 and 128 used controllers. First-block MPE allocations
+fell from 300 to zero, malformed-overlap broadcast from 120 to zero, and dense
+1,536-event traffic from 1,340 to zero. Representative 100-region active
+traffic measured 0.94x baseline for legacy, 1.03x for ordinary MPE, 1.05x for
+overlapping MPE and 1.14x for dense MPE. Full raw data, environment metadata
+and reproduction instructions are in
+[`design/benchmarks/smpl97-midi-dispatch.md`](benchmarks/smpl97-midi-dispatch.md).
 
 ## Migration sequence
 

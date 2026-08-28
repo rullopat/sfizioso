@@ -13,13 +13,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - SFZ `lochan` / `hichan` region routing across MIDI channels 1–16.
 - Source-channel isolation for channel-restricted CC conditions, keyswitches,
   sequences, note ownership, release triggers, pedals, bend and aftertouch.
+- Protocol-neutral logical-note identities, expression contexts and MIDI/MPE
+  profile adapters, including a future addressed-note expression seam.
+- Source-aware Program Change APIs in C and C++, with bounded global, zone and
+  group/channel routing state for channel-restricted `loprog` / `hiprog`.
+- A reproducible allocation and block-density benchmark comparing the
+  channel-expanded and protocol-neutral expression architectures.
 
 ### Changed
 
 - MPE-off input now retains the original source channel for SFZ eligibility
   while continuing to collapse expression routing to channel 0. MPE Full still
   honors channel ranges without bypassing Manager-only message filters.
-- `loprog` / `hiprog` remain global and unchanged.
+- Existing channel-less Program Change and omni `loprog` / `hiprog` remain
+  global. Source-aware input additionally lets effectively channel-restricted
+  regions retain independent program selections; Lower-Zone MPE Manager input
+  updates the zone and Mode-3 Member input is rejected before mutation.
+- Replaced the fixed 16 x 642 expression-vector topology with load-time dense,
+  control-thread-preallocated contexts shared by generation-safe logical notes.
 
 ## [1.1.0] - 2026-08-26
 
