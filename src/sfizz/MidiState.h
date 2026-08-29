@@ -7,19 +7,20 @@
 #pragma once
 #include <array>
 #include <bitset>
+#include <vector>
 #include "CCMap.h"
+#include "ExpressionContext.h"
+#include "ExpressionEvent.h"
 #include "Range.h"
 
-namespace sfz
-{
+namespace sfz {
 /**
  * @brief Holds the current "MIDI state", meaning the known state of all CCs
  * currently, as well as the note velocities that triggered the currently
  * pressed notes.
  *
  */
-class MidiState
-{
+class MidiState {
 public:
     MidiState();
 
@@ -96,6 +97,44 @@ public:
      * @param samplesPerBlock
      */
     void setSamplesPerBlock(int samplesPerBlock) noexcept;
+
+    /**
+     * @brief Densify sample-accurate controller slots for the loaded SFZ.
+     * Control-thread only; scalar state for all controller numbers remains.
+     */
+    void configureExpressionControls(
+        const std::array<bool, config::numCCs>& usedControllers);
+
+    /**
+     * @brief Preallocate/recycle note-scoped expression contexts alongside
+     * the logical-note registry. Configuration is control-thread only.
+     */
+    void configureNoteExpressionContexts(size_t capacity);
+    void beginNoteExpression(NoteInstanceId noteId) noexcept;
+    void endNoteExpression(NoteInstanceId noteId) noexcept;
+    void clearNoteExpressionContexts() noexcept;
+    void resetScopedExpressionContexts() noexcept;
+    ExpressionContext* getExpressionContext(ExpressionTarget target) noexcept;
+    const ExpressionContext* getExpressionContext(ExpressionTarget target) const noexcept;
+
+    /** Apply one transport-neutral event to its explicit expression target. */
+    bool expressionEvent(const ResolvedExpressionEvent& event) noexcept;
+
+    /**
+     * Resolve the explicit Note → broad target → Global inheritance policy
+     * for voice and modulation consumers. Note expression disappears
+     * automatically once its generation-safe context is detached.
+     */
+    const EventVector& getVoiceCCEvents(ExpressionTarget broadTarget,
+        NoteInstanceId noteId, int ccNumber) const noexcept;
+    const EventVector& getVoicePressureEvents(ExpressionTarget broadTarget,
+        NoteInstanceId noteId) const noexcept;
+    const EventVector& getVoicePolyPressureEvents(ExpressionTarget broadTarget,
+        NoteInstanceId noteId, int noteNumber) const noexcept;
+    const EventVector& getVoiceBroadPitchEvents(ExpressionTarget broadTarget) const noexcept;
+    const EventVector& getVoiceNotePitchEvents(NoteInstanceId noteId) const noexcept;
+
+    uint64_t getExpressionOverflowCount() const noexcept;
     /**
      * @brief Set the sample rate. If you do not call it it is initialized
      * to sfz::config::defaultSampleRate.
@@ -206,13 +245,21 @@ public:
      * @return int
      */
     int getProgram() const noexcept;
+    int getProgram(SourceAddress source) const noexcept;
+    int getProgram(RoutingTarget target) const noexcept;
     /**
-     * @brief Register a program change event
+     * @brief Register a global compatibility Program Change.
      *
-     * @param delay
-     * @param program
+     * Global changes update every bounded source/zone routing context.
      */
     void programChangeEvent(int delay, int program) noexcept;
+    /**
+     * @brief Register Program Change on an explicit non-note routing target.
+     *
+     * Channel targets also update the legacy global view while retaining
+     * independent source state. Zone targets update every source in the zone.
+     */
+    void programChangeEvent(int delay, RoutingTarget target, int program) noexcept;
 
     /**
      * @brief Register a CC event
@@ -351,30 +398,20 @@ public:
     float getMPEBendRangeForChannel(int channel) const noexcept;
 
 private:
-
-    /**
-     * @brief Insert events in a sorted event vector.
-     *
-     * @param events
-     * @param delay
-     * @param value
-     */
-    void insertEventInVector(EventVector& events, int delay, float value);
-
     int activeNotes { 0 };
 
     /**
      * @brief Stores the note on times.
      *
      */
-    MidiNoteArray<unsigned> noteOnTimes { {} };
+    MidiNoteArray<unsigned> noteOnTimes { { } };
 
     /**
      * @brief Stores the note off times.
      *
      */
 
-    MidiNoteArray<unsigned> noteOffTimes { {} };
+    MidiNoteArray<unsigned> noteOffTimes { { } };
 
     /**
      * @brief Store the note states
@@ -399,31 +436,29 @@ private:
      */
     int lastNotePlayed { -1 };
 
-    /**
-     * @brief Per-channel event state. Holds the pitch/CC/aftertouch event
-     * vectors for one MIDI channel. Introduced so MPE-aware callers can
-     * route events to a specific member channel without colliding with
-     * other channels' modulation. M1 wires only the master channel; M3
-     * will add channel-aware public API methods that target channels
-     * 1..15. Until then, all events resolve to channelStates[masterChannel]
-     * and behavior is byte-for-byte identical to the pre-refactor code.
-     */
-    struct ChannelState {
-        std::array<EventVector, config::numCCs> ccEvents;
-        std::array<EventVector, 128> polyAftertouchEvents;
-        EventVector pitchEvents;
-        EventVector channelAftertouchEvents;
-    };
-
-    /**
-     * @brief Per-channel pitch/CC/aftertouch state. Indexed 0..15 to match
-     * MIDI channels 1..16 (0-indexed). The master channel for non-MPE
-     * input is index 0; MPE member channels occupy 1..15 (or 0..14 with
-     * channel 16 as master, depending on zone configuration — currently
-     * fixed at master=0 pending M3).
-     */
     static constexpr int masterChannel = 0;
-    std::array<ChannelState, 16> channelStates;
+    static constexpr size_t compatibilityControllerSlots = 8;
+    static constexpr size_t compatibilityPolyPressureSlots = 4;
+    static constexpr size_t noteTimelineEvents = 65;
+
+    ExpressionContext& compatibilityContext(int channel) noexcept;
+    const ExpressionContext& compatibilityContext(int channel) const noexcept;
+
+    // The compatibility channel-0 API resolves to Global. Zone and Channel
+    // contexts remain explicit for adapter/profile milestones; member-channel
+    // compatibility calls currently use channelExpressionContexts_[1..15].
+    ExpressionContext globalExpressionContext_;
+    ExpressionContext lowerZoneExpressionContext_;
+    std::array<ExpressionContext, 16> channelExpressionContexts_;
+
+    struct NoteExpressionSlot {
+        ExpressionContext context;
+        uint16_t generation { 0 };
+        bool active { false };
+    };
+    std::vector<NoteExpressionSlot> noteExpressionSlots_;
+    std::bitset<config::numCCs> noteExpressionControllers_;
+    uint64_t retiredNoteExpressionOverflowCount_ { 0 };
 
     struct SourceNoteState {
         std::bitset<128> pressed;
@@ -450,9 +485,15 @@ private:
     const EventVector nullEvent { { 0, 0.0f } };
 
     /**
-     * @brief Current midi program
+     * @brief Bounded Program Change routing state.
+     *
+     * The legacy global scalar is retained. Sixteen explicit groups each own
+     * sixteen source-channel slots; this is routing state, not expression
+     * controller storage. Zone ids currently map to their protocol group.
      */
     int currentProgram { 0 };
+    std::array<int, 16> zonePrograms_ { { } };
+    std::array<int, 256> sourcePrograms_ { { } };
 
     float sampleRate { config::defaultSampleRate };
     int samplesPerBlock { config::defaultSamplesPerBlock };

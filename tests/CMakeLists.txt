@@ -25,14 +25,18 @@ set(SFIZZ_TEST_SOURCES
     HelpersT.cpp
     AudioBufferT.cpp
     EGDescriptionT.cpp
+    ExpressionContextT.cpp
     RangeT.cpp
     OpcodeT.cpp
     BufferT.cpp
     SIMDHelpersT.cpp
     FilesT.cpp
     MidiStateT.cpp
+    MidiIdentityT.cpp
+    MidiInputAdapterT.cpp
     MPET.cpp
     ChannelRoutingT.cpp
+    ProgramRoutingT.cpp
     InterpolatorsT.cpp
     SmoothersT.cpp
     PolyphonyT.cpp

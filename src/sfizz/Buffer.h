@@ -38,14 +38,12 @@
 #ifdef DEBUG
 #include <iostream>
 #endif
-namespace sfz
-{
+namespace sfz {
 
 /**
  * @brief      A buffer counting class that tries to track the memory usage.
  */
-class BufferCounter
-{
+class BufferCounter {
 public:
     /**
      * @brief      Return the buffer counter object.
@@ -90,12 +88,11 @@ public:
 
     size_t getNumBuffers() const noexcept { return numBuffers; }
     size_t getTotalBytes() const noexcept { return bytes; }
+
 private:
     std::atomic<size_t> numBuffers { 0 };
     std::atomic<size_t> bytes { 0 };
 };
-
-
 
 /**
  * @brief      A heap buffer structure that tries to align its beginning and
@@ -185,7 +182,9 @@ public:
         else
             _alignedEnd = normalEnd;
 
-        std::memcpy(normalData, oldNormalData, std::min(newSize, oldSize) * sizeof(Type));
+        const size_t copySize = std::min(newSize, oldSize);
+        if (copySize > 0)
+            std::memcpy(normalData, oldNormalData, copySize * sizeof(Type));
         std::free(oldData);
 
         return true;
@@ -244,12 +243,12 @@ public:
      * @param other
      */
     Buffer(Buffer<Type, Alignment>&& other) noexcept
-        : largerSize(other.largerSize),
-          alignedSize(other.alignedSize),
-          normalData(other.normalData),
-          paddedData(std::move(other.paddedData)),
-          normalEnd(other.normalEnd),
-          _alignedEnd(other._alignedEnd)
+        : largerSize(other.largerSize)
+        , alignedSize(other.alignedSize)
+        , normalData(other.normalData)
+        , paddedData(std::move(other.paddedData))
+        , normalEnd(other.normalEnd)
+        , _alignedEnd(other._alignedEnd)
     {
         other._clear();
     }
@@ -283,7 +282,7 @@ public:
     constexpr pointer data() const noexcept { return normalData; }
     constexpr size_type size() const noexcept { return alignedSize; }
     constexpr bool empty() const noexcept { return alignedSize == 0; }
-    constexpr iterator begin() const noexcept  { return data(); }
+    constexpr iterator begin() const noexcept { return data(); }
     constexpr iterator end() const noexcept { return normalEnd; }
     constexpr pointer alignedEnd() const noexcept { return _alignedEnd; }
 
@@ -315,19 +314,20 @@ private:
     static_assert(std::is_trivial<value_type>::value, "Type should be trivial");
     static_assert(Alignment == 0 || Alignment == 4 || Alignment == 8 || Alignment == 16 || Alignment == 32, "Bad alignment value");
     static_assert(TypeAlignment * sizeof(value_type) == Alignment || !std::is_arithmetic<value_type>::value,
-                  "The alignment does not appear to be divided by the size of the arithmetic Type");
-    void* align(std::size_t alignment, std::size_t size, void *ptr, std::size_t &space)
+        "The alignment does not appear to be divided by the size of the arithmetic Type");
+    void* align(std::size_t alignment, std::size_t size, void* ptr, std::size_t& space)
     {
         std::uintptr_t pn = reinterpret_cast<std::uintptr_t>(ptr);
-        std::uintptr_t aligned = (pn + alignment - 1) & - alignment;
+        std::uintptr_t aligned = (pn + alignment - 1) & -alignment;
         std::size_t padding = aligned - pn;
-        if (space < size + padding) return nullptr;
+        if (space < size + padding)
+            return nullptr;
         space -= padding;
-        return reinterpret_cast<void *>(aligned);
+        return reinterpret_cast<void*>(aligned);
     }
 
     struct deleter {
-        void operator()(void *p) const noexcept { std::free(p); }
+        void operator()(void* p) const noexcept { std::free(p); }
     };
 
     size_type largerSize { 0 };

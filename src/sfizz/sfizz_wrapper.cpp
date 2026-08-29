@@ -32,8 +32,8 @@ bool sfizz_load_string(sfizz_synth_t* synth, const char* path, const char* text)
 }
 
 void sfizz_set_sample_reader(sfizz_synth_t* synth,
-                             sfizz_sample_reader_t* reader,
-                             void* user_data)
+    sfizz_sample_reader_t* reader,
+    void* user_data)
 {
     synth->cSampleReader.callback = reader;
     synth->cSampleReader.userData = user_data;
@@ -206,6 +206,10 @@ void sfizz_send_cc_channel(sfizz_synth_t* synth, int delay, int channel, int cc_
 void sfizz_send_hdcc_channel(sfizz_synth_t* synth, int delay, int channel, int cc_number, float norm_value)
 {
     synth->synth.hdcc(delay, channel, cc_number, norm_value);
+}
+void sfizz_send_program_change_channel(sfizz_synth_t* synth, int delay, int channel, int program)
+{
+    synth->synth.programChange(delay, channel, program);
 }
 void sfizz_send_pitch_wheel_channel(sfizz_synth_t* synth, int delay, int channel, int pitch)
 {
@@ -390,13 +394,13 @@ char* sfizz_get_unknown_opcodes(sfizz_synth_t* synth)
 {
     const auto unknownOpcodes = synth->synth.getUnknownOpcodes();
     size_t totalLength = 0;
-    for (auto& opcode: unknownOpcodes)
+    for (auto& opcode : unknownOpcodes)
         totalLength += opcode.length() + 1;
 
     if (totalLength == 0)
         return nullptr;
 
-    auto opcodeList = (char *)std::malloc(totalLength);
+    auto opcodeList = (char*)std::malloc(totalLength);
 
     auto listIterator = opcodeList;
     for (auto& opcode : unknownOpcodes) {
@@ -478,12 +482,11 @@ int sfizz_get_key_label_number(sfizz_synth_t* synth, int label_index)
     // Sanity checks for the future or platforms
     static_assert(
         std::numeric_limits<sfz::NoteNamePair::first_type>::max() < std::numeric_limits<int>::max(),
-        "The C API sends back an int but the note index in NoteNamePair can overflow it on this platform"
-    );
+        "The C API sends back an int but the note index in NoteNamePair can overflow it on this platform");
     return static_cast<int>(keyLabels[label_index].first);
 }
 
-const char * sfizz_get_key_label_text(sfizz_synth_t* synth, int label_index)
+const char* sfizz_get_key_label_text(sfizz_synth_t* synth, int label_index)
 {
     const auto keyLabels = synth->synth.getKeyLabels();
     if (label_index < 0)
@@ -512,12 +515,11 @@ int sfizz_get_cc_label_number(sfizz_synth_t* synth, int label_index)
     // Sanity checks for the future or platforms
     static_assert(
         std::numeric_limits<sfz::CCNamePair::first_type>::max() < std::numeric_limits<int>::max(),
-        "The C API sends back an int but the cc index in CCNamePair can overflow it on this platform"
-    );
+        "The C API sends back an int but the cc index in CCNamePair can overflow it on this platform");
     return static_cast<int>(ccLabels[label_index].first);
 }
 
-const char * sfizz_get_cc_label_text(sfizz_synth_t* synth, int label_index)
+const char* sfizz_get_cc_label_text(sfizz_synth_t* synth, int label_index)
 {
     const auto ccLabels = synth->synth.getCCLabels();
     if (label_index < 0)

@@ -7,6 +7,7 @@
 #pragma once
 #include "Region.h"
 #include "Config.h"
+#include "MidiIdentity.h"
 #include "utility/NumericId.h"
 #include "utility/LeakDetector.h"
 #include <absl/strings/string_view.h>
@@ -55,7 +56,11 @@ public:
      * @return true
      * @return false
      */
-    bool isSwitchedOn(int sourceChannel = 0) const noexcept;
+    bool isSwitchedOn(SourceAddress source) const noexcept;
+    bool isSwitchedOn(int sourceChannel = 0) const noexcept
+    {
+        return isSwitchedOn(SourceAddress::fromMidi1(sourceChannel));
+    }
     bool isSourceChannelEligible(int sourceChannel) const noexcept;
     /**
      * @brief Register a new note on event. The region may be switched on or off using keys so
@@ -68,7 +73,14 @@ public:
      * @return true if the region should trigger on this event.
      * @return false
      */
-    bool registerNoteOn(int noteNumber, float velocity, float randValue, int sourceChannel = 0) noexcept;
+    bool registerNoteOn(int noteNumber, float velocity, float randValue,
+        SourceAddress source) noexcept;
+    bool registerNoteOn(int noteNumber, float velocity, float randValue,
+        int sourceChannel = 0) noexcept
+    {
+        return registerNoteOn(noteNumber, velocity, randValue,
+            SourceAddress::fromMidi1(sourceChannel));
+    }
     /**
      * @brief Register a new note off event. The region may be switched on or off using keys so
      * this function updates the keyswitches state.
@@ -81,7 +93,15 @@ public:
      * @return false
      */
     bool registerNoteOff(int noteNumber, float velocity, float randValue,
-        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+        SourceAddress source, int expressionChannel = 0,
+        NoteInstanceId noteId = { }) noexcept;
+    bool registerNoteOff(int noteNumber, float velocity, float randValue,
+        int sourceChannel = 0, int expressionChannel = 0,
+        NoteInstanceId noteId = { }) noexcept
+    {
+        return registerNoteOff(noteNumber, velocity, randValue,
+            SourceAddress::fromMidi1(sourceChannel), expressionChannel, noteId);
+    }
     /**
      * @brief Update the internal state of the layer with respect to CC events (sustain, CC
      *  switch, etc).
@@ -105,8 +125,15 @@ public:
      * @return false otherwise
      */
     bool registerCC(int ccNumber, float ccValue, float randValue,
-        int extendedArg = -1, int sourceChannel = 0,
+        int extendedArg, SourceAddress source,
         int expressionChannel = 0) noexcept;
+    bool registerCC(int ccNumber, float ccValue, float randValue,
+        int extendedArg = -1, int sourceChannel = 0,
+        int expressionChannel = 0) noexcept
+    {
+        return registerCC(ccNumber, ccValue, randValue, extendedArg,
+            SourceAddress::fromMidi1(sourceChannel), expressionChannel);
+    }
     /**
      * @brief Register a new pitch wheel event.
      *
@@ -139,8 +166,18 @@ public:
     struct DelayedRelease {
         int noteNumber;
         float velocity;
-        int sourceChannel;
-        int expressionChannel;
+        int sourceChannel { 0 };
+        int expressionChannel { 0 };
+        NoteInstanceId noteId { };
+
+        bool operator==(const DelayedRelease& other) const noexcept
+        {
+            return noteNumber == other.noteNumber
+                && velocity == other.velocity
+                && sourceChannel == other.sourceChannel
+                && expressionChannel == other.expressionChannel
+                && noteId == other.noteId;
+        }
     };
 
     struct SourceActivationState {
@@ -160,17 +197,19 @@ public:
     // restrictions, preserving ordinary SFZ behavior and memory cost.
     bool sustainPressed_ { false };
     bool sostenutoPressed_ { false };
-    std::vector<std::pair<int, float>> delayedSustainReleases_;
-    std::vector<std::pair<int, float>> delayedSostenutoReleases_;
+    std::vector<DelayedRelease> delayedSustainReleases_;
+    std::vector<DelayedRelease> delayedSostenutoReleases_;
     std::unique_ptr<std::array<SourceActivationState, 16>> sourceStates_;
     std::vector<DelayedRelease> sourceDelayedSustainReleases_;
     std::vector<DelayedRelease> sourceDelayedSostenutoReleases_;
 
     void reserveDelayedReleaseCapacity(size_t capacity);
     void delaySustainRelease(int noteNumber, float velocity,
-        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+        int sourceChannel = 0, int expressionChannel = 0,
+        NoteInstanceId noteId = { }) noexcept;
     void delaySostenutoRelease(int noteNumber, float velocity,
-        int sourceChannel = 0, int expressionChannel = 0) noexcept;
+        int sourceChannel = 0, int expressionChannel = 0,
+        NoteInstanceId noteId = { }) noexcept;
     void storeSostenutoNotes(int sourceChannel = 0, int expressionChannel = 0) noexcept;
     void removeFromSostenutoReleases(int noteNumber, int sourceChannel = 0) noexcept;
     bool isNoteSustained(int noteNumber, int sourceChannel = 0) const noexcept;
@@ -179,13 +218,13 @@ public:
     bool isSostenutoPressed(int sourceChannel = 0) const noexcept;
 
     const MidiState& midiState_;
-    bool keySwitched_ {};
-    bool previousKeySwitched_ {};
-    bool sequenceSwitched_ {};
-    bool pitchSwitched_ {};
-    bool programSwitched_ {};
-    bool bpmSwitched_ {};
-    bool aftertouchSwitched_ {};
+    bool keySwitched_ { };
+    bool previousKeySwitched_ { };
+    bool sequenceSwitched_ { };
+    bool pitchSwitched_ { };
+    bool programSwitched_ { };
+    bool bpmSwitched_ { };
+    bool aftertouchSwitched_ { };
     std::bitset<config::numCCs> ccSwitched_;
 
     int sequenceCounter_ { 0 };

@@ -742,6 +742,20 @@ SFIZZ_EXPORTED_API void sfizz_send_cc_channel(sfizz_synth_t* synth, int delay, i
 SFIZZ_EXPORTED_API void sfizz_send_hdcc_channel(sfizz_synth_t* synth, int delay, int channel, int cc_number, float norm_value);
 
 /**
+ * @brief Send source-aware Program Change on a specific MIDI channel.
+ *
+ * With MPE disabled this updates the source context and legacy global view.
+ * In Lower-Zone MPE, Manager input updates Zone/global state and Mode-3
+ * Member input is dropped before any program state changes.
+ *
+ * @param synth    The synth.
+ * @param delay    The delay of the event in the block, in samples.
+ * @param channel  The MIDI channel, in domain 0 to 15.
+ * @param program  The MIDI program, in domain 0 to 127.
+ */
+SFIZZ_EXPORTED_API void sfizz_send_program_change_channel(sfizz_synth_t* synth, int delay, int channel, int program);
+
+/**
  * @brief Send a pitch wheel event on a specific MIDI channel (0..15).
  *
  * @param synth    The synth.

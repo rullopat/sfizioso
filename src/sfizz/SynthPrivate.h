@@ -6,6 +6,8 @@
 #include "TriggerEvent.h"
 #include "VoiceManager.h"
 #include "Layer.h"
+#include "NoteRegistry.h"
+#include "MidiInputAdapter.h"
 #include "BitArray.h"
 #include "modulations/sources/ADSREnvelope.h"
 #include "modulations/sources/Controller.h"
@@ -133,8 +135,8 @@ struct Synth::Impl final: public Parser::Listener {
      * @param noteNumber
      * @param velocity
      */
-    void noteOnDispatch(int delay, int sourceChannel, int expressionChannel,
-        int noteNumber, float velocity) noexcept;
+    void noteOnDispatch(int delay, SourceAddress source, int expressionChannel,
+        int noteNumber, float velocity, NoteInstanceId noteId) noexcept;
 
     /**
      * @brief Check all regions and start voices for note off events
@@ -146,9 +148,9 @@ struct Synth::Impl final: public Parser::Listener {
      * @param noteNumber
      * @param velocity
      */
-    void noteOffDispatch(int delay, int sourceChannel, int expressionChannel,
-        int noteNumber, float globalVelocity,
-        float sourceVelocity) noexcept;
+    void noteOffDispatch(int delay, SourceAddress source, int expressionChannel,
+        int noteNumber, float globalVelocity, float sourceVelocity,
+        NoteInstanceId noteId) noexcept;
 
     /**
      * @brief Check all regions and start voices for cc events
@@ -252,20 +254,11 @@ struct Synth::Impl final: public Parser::Listener {
      * @param asMidi     Whether to process as a MIDI event
      * @param extendedArg for some extendedCC (eg. polyaftertouch: note num, etc)
      */
-    void performHdcc(int delay, int channel, int ccNumber, float normValue, bool asMidi, int extendedArg=-1) noexcept;
-
-    /**
-     * @brief Tap on the CCs that drive MIDI RPN/NRPN selection and data
-     *        entry (CCs 6, 38, 98, 99, 100, 101). Called from performHdcc
-     *        before the normal dispatch so the CCs continue through to
-     *        MidiState and SFZ *_oncc bindings untouched. When a complete
-     *        MPE Configuration Message (RPN 6) or Pitch Bend Sensitivity
-     *        (RPN 0) sequence is detected on the relevant channel, drives
-     *        the MPE auto-config handlers (per-direction opt-out via the
-     *        mpeMasterBendAutoConfigEnabled_ / mpePerNoteBendAutoConfigEnabled_
-     *        flags; MCM enable/disable is unconditional per MPE 1.0).
-     */
-    void handleRpnControlCC(int channel, int ccNumber, float normValue) noexcept;
+    void performHdcc(int delay, int channel, int ccNumber, float normValue,
+        bool asMidi, int extendedArg = -1) noexcept;
+    void dispatchExpression(const MidiExpressionRoute& route,
+        SourceAddress source) noexcept;
+    void reapplyResolvedPitch(int delay) noexcept;
 
     /**
      * @brief Set the default value for a CC
@@ -326,6 +319,7 @@ struct Synth::Impl final: public Parser::Listener {
     using RegionSetPtr = std::unique_ptr<RegionSet>;
     std::vector<LayerPtr> layers_;
     VoiceManager voiceManager_;
+    NoteRegistry noteRegistry_;
 
     // These are more general "groups" than sfz and encapsulates the full hierarchy
     RegionSet* currentSet_ { nullptr };
@@ -416,51 +410,9 @@ struct Synth::Impl final: public Parser::Listener {
 
     bool playheadMoved_ { false };
 
-    // MPE expression state. Source channels are always retained for fixed SFZ
-    // routing; this flag decides whether expression also follows that channel
-    // and enables zone filtering, MPE bend handling and voice-steal preference.
-    bool mpeEnabled_ { false };
-    float mpeMasterPitchBendRange_ { 2.0f };
-    float mpePerNotePitchBendRange_ { 48.0f };
-
-    // MPE auto-config (RPN 6 + RPN 0). The engine listens for the MPE
-    // Configuration Message and Pitch Bend Sensitivity sequences per
-    // MPE 1.0 §2 and updates mpeEnabled_ / the bend-range fields
-    // without host intervention. The bend-range updates are gated by the
-    // two flags below so UIs can opt out per direction; MCM enable/disable
-    // always drives mpeEnabled_ because that is the spec contract.
-    bool mpeMasterBendAutoConfigEnabled_ { true };
-    bool mpePerNoteBendAutoConfigEnabled_ { true };
-
-    // Per-channel RPN parser state. RPN selection is per-channel per the
-    // MIDI spec, so 16 instances. selectedRpn is a 14-bit value composed
-    // of CC 101 (MSB, bits 7..13) and CC 100 (LSB, bits 0..6); the
-    // initial / null/deselect sentinel is 0x3FFF (both at 127). nrpnMode
-    // tracks whether the last CC 98/99 vs CC 100/101 message set NRPN
-    // vs RPN, so that a CC 6 following an NRPN selection isn't
-    // misinterpreted as RPN data entry.
-    struct RpnParserState {
-        static constexpr uint16_t kNullRpn = 0x3FFF;
-        uint16_t selectedRpn { kNullRpn };
-        bool nrpnMode { false };
-    };
-    std::array<RpnParserState, 16> rpnParsers_;
-
-    // Spec-violation diagnostic: Polyphonic Key Pressure on a Member Channel
-    // is prohibited by MPE 1.0 §2.2.7 ("Polyphonic Key Pressure shall not be
-    // sent on other Member Channels"). When mpeEnabled_ is set, the engine
-    // drops such events at the hdPolyAftertouch entry and increments this
-    // counter so hosts / tests can observe how often it fired.
-    int droppedPolyKpOnMember_ { 0 };
-
-    // Spec-violation diagnostic: Manager-only CC messages (pedal CCs, mode
-    // and reset CCs, Bank Select) arriving on a Member Channel while MPE
-    // is enabled are dropped at the top of performHdcc per MPE 1.0 §2.3.1
-    // / §2.3.3 (Appendix E Table 5). This counter is incremented per drop
-    // so hosts / tests can observe spec-violating traffic. Program Change
-    // on Member Channels is filtered host-side because the engine
-    // programChange API does not carry a channel argument.
-    int droppedManagerOnlyCCs_ { 0 };
+    // MIDI transport normalization and all Lower-Zone MPE profile policy.
+    // Core expression dispatch and voices consume only resolved targets.
+    MidiInputAdapter midiInputAdapter_;
 };
 
 } // namespace sfz

@@ -1,0 +1,6 @@
+base_ref=a713070d7341763a2460a05a3f30da55b00b5cb1
+current_ref=f8557e041a12b1de7537b6ae2ee89068ac0a7c97
+iterations=50
+compiler=c++ (GCC) 16.2.1 20260810
+kernel=Linux 7.1.9-arch1-2 x86_64 GNU/Linux
+cpu=AMD Ryzen 7 255 w/ Radeon 780M Graphics

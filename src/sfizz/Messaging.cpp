@@ -14,11 +14,13 @@
 // Note(jpc) alignment checks fail on old gcc i386
 static_assert(
     sizeof(sfizz_arg_t) == sizeof(int64_t) /* &&
-    alignof(sfizz_arg_t) == alignof(int64_t) */,
+    alignof(sfizz_arg_t) == alignof(int64_t) */
+    ,
     "The ABI stability check has failed.");
 
 template <class T>
-static T paddingSize(T count, unsigned align) {
+static T paddingSize(T count, unsigned align)
+{
     unsigned mask = align - 1;
     return (align - (count & mask)) & mask;
 };
@@ -32,7 +34,8 @@ public:
 private:
     uint32_t appendBytes(const void* src, uint32_t count);
     uint32_t appendZeros(uint32_t count);
-    template <class T> uint32_t appendInteger(T integer);
+    template <class T>
+    uint32_t appendInteger(T integer);
     uint32_t appendFloat(float f);
     uint32_t appendDouble(float d);
 
@@ -48,9 +51,11 @@ public:
     int32_t extractMessage(const char** outPath, const char** outSig, const sfizz_arg_t** outArgs);
 
 private:
-    template <class T> T* allocate(uint32_t count);
+    template <class T>
+    T* allocate(uint32_t count);
     bool extractString(const char*& outStr, uint32_t& outLen);
-    template <class T> bool extractInteger(T& outValue);
+    template <class T>
+    bool extractInteger(T& outValue);
     bool extractFloat(float& f);
     bool extractDouble(double& d);
 
@@ -127,20 +132,16 @@ uint32_t OSCWriter::writeMessage(const char* path, const char* sig, const sfizz_
             msglen += appendDouble(args[i].d);
             break;
         case 's':
-        case 'S':
-            {
-                size_t len = strlen(args[i].s);
-                msglen += appendBytes(args[i].s, len + 1);
-                msglen += appendZeros(paddingSize(len + 1, 4));
-            }
-            break;
-        case 'b':
-            {
-                msglen += appendInteger(args[i].b->size);
-                msglen += appendBytes(args[i].b->data, args[i].b->size);
-                msglen += appendZeros(paddingSize(args[i].b->size, 4));
-            }
-            break;
+        case 'S': {
+            size_t len = strlen(args[i].s);
+            msglen += appendBytes(args[i].s, len + 1);
+            msglen += appendZeros(paddingSize(len + 1, 4));
+        } break;
+        case 'b': {
+            msglen += appendInteger(args[i].b->size);
+            msglen += appendBytes(args[i].b->data, args[i].b->size);
+            msglen += appendZeros(paddingSize(args[i].b->size, 4));
+        } break;
         case 'T':
         case 'F':
         case 'N':
@@ -155,7 +156,8 @@ uint32_t OSCWriter::writeMessage(const char* path, const char* sig, const sfizz_
 uint32_t OSCWriter::appendBytes(const void* src, uint32_t count)
 {
     uint32_t written = std::min(dstCapacity_, count);
-    memcpy(dstBuffer_, src, written);
+    if (written > 0)
+        memcpy(dstBuffer_, src, written);
     dstBuffer_ += written;
     dstCapacity_ -= written;
     return count;
@@ -164,13 +166,15 @@ uint32_t OSCWriter::appendBytes(const void* src, uint32_t count)
 uint32_t OSCWriter::appendZeros(uint32_t count)
 {
     uint32_t written = std::min(dstCapacity_, count);
-    memset(dstBuffer_, '\0', written);
+    if (written > 0)
+        memset(dstBuffer_, '\0', written);
     dstBuffer_ += written;
     dstCapacity_ -= written;
     return count;
 }
 
-template <class T> uint32_t OSCWriter::appendInteger(T integer)
+template <class T>
+uint32_t OSCWriter::appendInteger(T integer)
 {
     using U = typename std::make_unsigned<T>::type;
     const U uinteger = static_cast<U>(integer);
@@ -184,14 +188,20 @@ template <class T> uint32_t OSCWriter::appendInteger(T integer)
 
 uint32_t OSCWriter::appendFloat(float f)
 {
-    union { float f; uint32_t i; } u;
+    union {
+        float f;
+        uint32_t i;
+    } u;
     u.f = f;
     return appendInteger(u.i);
 }
 
 uint32_t OSCWriter::appendDouble(float d)
 {
-    union { double d; uint64_t i; } u;
+    union {
+        double d;
+        uint64_t i;
+    } u;
     u.d = d;
     return appendInteger(u.i);
 }
@@ -268,33 +278,29 @@ int32_t OSCReader::extractMessage(const char** outPath, const char** outSig, con
                 return 0;
             break;
         case 's':
-        case 'S':
-            {
-                const char* str;
-                uint32_t len;
-                if (!extractString(str, len))
-                    return 0;
-                args[i].s = str;
-            }
-            break;
-        case 'b':
-            {
-                sfizz_blob_t* blob = allocate<sfizz_blob_t>(1);
-                if (!blob)
-                    return -1;
-                args[i].b = blob;
-                uint32_t len = blob->size;
-                if (!extractInteger(len))
-                    return 0;
-                uint32_t padlen = len + paddingSize(len, 4);
-                if (srcCapacity_ < padlen)
-                    return 0;
-                blob->data = srcBuffer_;
-                blob->size = len;
-                srcBuffer_ += padlen;
-                srcCapacity_ -= padlen;
-            }
-            break;
+        case 'S': {
+            const char* str;
+            uint32_t len;
+            if (!extractString(str, len))
+                return 0;
+            args[i].s = str;
+        } break;
+        case 'b': {
+            sfizz_blob_t* blob = allocate<sfizz_blob_t>(1);
+            if (!blob)
+                return -1;
+            args[i].b = blob;
+            uint32_t len = blob->size;
+            if (!extractInteger(len))
+                return 0;
+            uint32_t padlen = len + paddingSize(len, 4);
+            if (srcCapacity_ < padlen)
+                return 0;
+            blob->data = srcBuffer_;
+            blob->size = len;
+            srcBuffer_ += padlen;
+            srcCapacity_ -= padlen;
+        } break;
         case 'T':
         case 'F':
         case 'N':
@@ -306,7 +312,8 @@ int32_t OSCReader::extractMessage(const char** outPath, const char** outSig, con
     return srcBuffer_ - srcStart;
 }
 
-template <class T> T* OSCReader::allocate(uint32_t count)
+template <class T>
+T* OSCReader::allocate(uint32_t count)
 {
     uintptr_t pad = paddingSize(reinterpret_cast<uintptr_t>(allocBuffer_), alignof(T));
     uint32_t size = count * sizeof(T);
@@ -315,7 +322,7 @@ template <class T> T* OSCReader::allocate(uint32_t count)
     void* ptr = allocBuffer_ + pad;
     allocBuffer_ += pad + size;
     allocCapacity_ -= pad + size;
-    return reinterpret_cast<T *>(ptr);
+    return reinterpret_cast<T*>(ptr);
 }
 
 bool OSCReader::extractString(const char*& outStr, uint32_t& outLen)
@@ -334,7 +341,8 @@ bool OSCReader::extractString(const char*& outStr, uint32_t& outLen)
     return true;
 }
 
-template <class T> bool OSCReader::extractInteger(T& outValue)
+template <class T>
+bool OSCReader::extractInteger(T& outValue)
 {
     if (srcCapacity_ < sizeof(T))
         return false;
@@ -351,7 +359,10 @@ template <class T> bool OSCReader::extractInteger(T& outValue)
 
 bool OSCReader::extractFloat(float& f)
 {
-    union { float f; uint32_t i; } u;
+    union {
+        float f;
+        uint32_t i;
+    } u;
     if (!extractInteger(u.i))
         return false;
     f = u.f;
@@ -360,7 +371,10 @@ bool OSCReader::extractFloat(float& f)
 
 bool OSCReader::extractDouble(double& d)
 {
-    union { double d; uint64_t i; } u;
+    union {
+        double d;
+        uint64_t i;
+    } u;
     if (!extractInteger(u.i))
         return false;
     d = u.d;
