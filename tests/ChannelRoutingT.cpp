@@ -732,7 +732,7 @@ TEST_CASE("[Channel routing] off-groups do not cross restricted source ownership
     REQUIRE(countPlayingSample(f.synth, "*saw") == 2);
 }
 
-TEST_CASE("[Channel routing] loprog and hiprog remain global in both MPE modes")
+TEST_CASE("[Channel routing] channel-less Program Change broadcasts in both MPE modes")
 {
     for (bool mpe : { false, true }) {
         CAPTURE(mpe);
