@@ -94,7 +94,7 @@ A voice reads a composition of Global, Zone, Channel and Note contexts. Composit
 - note pressure/timbre overrides broader inherited values when present;
 - pedals retain zone/global scope;
 - ordinary controller inheritance has one explicit policy;
-- MPE Note/Member expression detaches at release where required, while permitted Manager/Zone expression remains.
+- MPE Note/Member expression detaches at Note Off where required, while permitted Manager/Zone expression remains. Each voice snapshots the bounded note-pitch timeline before the logical-note slot is recycled, retaining the last Member bend throughout release and pedal sustain. This block's timeline collapses to its final value after rendering; no audio-thread allocation is needed.
 
 MPE bend ranges, MCM/RPN interpretation, Manager/Member filtering and release rules belong to the MPE adapter/profile resolver. Voice and modulation-source code consumes resolved contexts without branching on transport protocol.
 

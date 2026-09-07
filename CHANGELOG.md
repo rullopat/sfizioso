@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-07
+
+### Fixed
+
+- Retain Member pitch bend at Note Off instead of returning released MPE notes
+  to their unbent pitch (issue #4). Sustain and sostenuto-held notes retain the
+  same tuning; live Manager bend continues to add to the frozen Member bend.
+- Preserve the Note Off block's pitch timeline when the Member channel and
+  logical-note slot are reused. Storage is reserved before audio processing.
+
+### Added
+
+- Rendered-audio regressions for release tuning, both pedals, Member reuse,
+  Manager bend, within-block bend timing, and voice reuse.
+
 ## [1.2.0] - 2026-08-30
 
 ### Added

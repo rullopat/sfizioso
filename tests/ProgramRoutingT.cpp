@@ -433,6 +433,8 @@ TEST_CASE("[Program routing] reused MPE Member after program switch cannot modul
     f.synth.hdcc(9, 1, 74, 0.75f);
     const auto& state = f.synth.getResources().getMidiState();
     REQUIRE(state.getExpressionContext(sfz::ExpressionTarget::note(old.noteId)) == nullptr);
+    // The retired context is gone; the old voice owns its frozen pitch now.
+    // MPEReleasePitchT verifies that snapshot through rendered audio.
     REQUIRE(state.getVoiceNotePitchEvents(old.noteId).back().value == 0.0f);
     REQUIRE(state.getVoiceBroadPitchEvents(old.expressionTarget).back().value == 1.0f);
     REQUIRE(state.getVoicePressureEvents(old.expressionTarget, old.noteId).back().value == 0.25f);

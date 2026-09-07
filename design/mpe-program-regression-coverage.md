@@ -13,7 +13,7 @@ MPE, `loprog` / `hiprog`, and `lochan` / `hichan`:
 | Queued sustain releases | Release-region eligibility is evaluated at Note Off. A release already queued under one program retains that selection when the Manager changes programs before pedal-up. The queue drains once. |
 | Overlapping ranges and expression | Only channel/program-eligible layers start. Both layers of an overlapping Member receive its pitch, pressure and CC74; other Members remain isolated. Manager pitch remains the broad contribution, while pressure/CC74 supply the fallback when a note has no override. |
 | Explicit and RPN transitions | Manager changes replace earlier independent source selections; rejected Member changes do not mutate them. After disabling MPE, source changes are accepted independently again. Re-enabling restores the Manager-only policy. |
-| Reused Member and release tail | A same-channel/same-pitch note under the new program receives a new logical identity. Its pitch, pressure and CC74 cannot modulate the old tail; the tail retains Manager expression. Both voices eventually finish. |
+| Reused Member and release tail | A same-channel/same-pitch note under the new program receives a new logical identity. Its pitch, pressure and CC74 cannot modulate the old tail; the tail retains its final Member bend plus live Manager bend. `MPEReleasePitchT.cpp` verifies the rendered pitch, pedal sustain, and within-block timing. Both voices eventually finish. |
 | Public C and C++ wrappers | Manager Program Change reaches restricted regions at MIDI channels 2 and 16; excluded channels do not play. Member changes are rejected. Program values 0 and 127 survive both public interfaces. |
 
 The transition case clears sound between probes so program-state persistence

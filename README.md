@@ -17,10 +17,10 @@ An independent, **MPE-capable fork** of the [sfizz] SFZ parser + synthesis C++ l
   Bend Sensitivity).
 - **MPE 1.0 conformance filters** — drop Polyphonic Key Pressure on Member
   Channels (§2.2.7); drop Manager-only CCs (pedals, mode/reset, Bank Select)
-  received on Member Channels (§2.3.1 / §2.3.3); route a released voice's
-  PB / CP / CC#74 / Poly Key Pressure reads through the Manager Channel so a
-  release tail stops responding to traffic on a now-reused Member Channel
-  (§2.2.6 / §2.2.7 / §2.2.8).
+  received on Member Channels (§2.3.1 / §2.3.3); freeze Member pitch bend at
+  Note Off while continuing to add live Manager bend, including pedal-held
+  notes. Released CP / CC#74 / Poly Key Pressure reads fall back to the Manager
+  Channel, so a reused Member Channel cannot modulate the old release tail.
 - **Fixed-channel SFZ routing** — `lochan` / `hichan` select regions from the
   original MIDI source channel, with isolated CC conditions, keyswitches,
   sequences and note/release ownership. This works with MPE disabled or enabled;

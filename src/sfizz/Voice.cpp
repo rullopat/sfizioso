@@ -234,6 +234,10 @@ struct Voice::Impl
     SostenutoState sostenutoState_ { SostenutoState::Up };
 
     TriggerEvent triggerEvent_;
+    // Owned by the voice: the logical-note slot can be reused immediately at
+    // Note Off. Keep this block's pitch events, then retain only the last value.
+    EventVector releasedNotePitch_;
+    void freezeNotePitch(int delay) noexcept;
     /**
      * @brief Compatibility MIDI expression channel retained for voice
      * stealing, Note Off matching and the public diagnostic accessor.
@@ -382,6 +386,7 @@ Voice& Voice::operator=(Voice&& other) noexcept {
 Voice::Impl::Impl(int voiceNumber, Resources& resources)
 : id_ { voiceNumber }, stateListener_(nullptr), resources_(resources)
 {
+    releasedNotePitch_.reserve(MidiState::noteTimelineEvents);
     for (unsigned i = 0; i < config::filtersPerVoice; ++i)
         filters_.emplace_back(resources);
 
@@ -428,6 +433,9 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
     impl.region_ = &region;
 
     impl.triggerEvent_ = event;
+    impl.releasedNotePitch_.clear();
+    if (event.type == TriggerEventType::NoteOff)
+        impl.freezeNotePitch(delay);
     impl.triggerChannel_ = event.channel;
     if (impl.triggerEvent_.type == TriggerEventType::CC)
         impl.triggerEvent_.number = region.pitchKeycenter;
@@ -656,6 +664,24 @@ void Voice::Impl::off(int delay, bool fast) noexcept
     release(delay);
 }
 
+void Voice::Impl::freezeNotePitch(int delay) noexcept
+{
+    if (!releasedNotePitch_.empty())
+        return;
+    const ExpressionContext* context = resources_.getMidiState().getExpressionContext(
+        ExpressionTarget::note(triggerEvent_.noteId));
+    if (!context || !context->hasPitch())
+        return;
+
+    const EventVector& events = context->pitchEvents();
+    ASSERT(events.size() <= releasedNotePitch_.capacity());
+    for (const MidiEvent& event : events) {
+        if (event.delay > delay)
+            break;
+        releasedNotePitch_.push_back(event);
+    }
+}
+
 void Voice::registerNoteOff(int delay, int expressionChannel, int sourceChannel,
     int noteNumber, float velocity, NoteInstanceId noteId) noexcept
 {
@@ -679,6 +705,8 @@ void Voice::registerNoteOff(int delay, int expressionChannel, int sourceChannel,
         : impl.triggerEvent_.number == noteNumber && channelMatches;
 
     if (noteMatches && impl.triggerEvent_.type == TriggerEventType::NoteOn) {
+        // Freeze at physical Note Off, including one-shots and pedal-held notes.
+        impl.freezeNotePitch(delay);
         impl.noteIsOff_ = true;
 
         if (impl.region_->loopMode == LoopMode::one_shot)
@@ -866,6 +894,11 @@ void Voice::renderBlock(AudioSpan<float, 2> buffer) noexcept
     }
 
     impl.powerFollower_.process(buffer);
+
+    if (!impl.releasedNotePitch_.empty()) {
+        impl.releasedNotePitch_.front() = { 0, impl.releasedNotePitch_.back().value };
+        impl.releasedNotePitch_.resize(1);
+    }
 
     impl.age_ += buffer.getNumFrames();
     if (impl.triggerDelay_) {
@@ -2083,11 +2116,12 @@ void Voice::Impl::pitchEnvelope(absl::Span<float> pitchSpan) noexcept
         else
             linearEnvelope(broadEvents, pitchSpan, semitonesToCents);
 
-        const EventVector& noteEvents =
-            midiState.getVoiceNotePitchEvents(triggerEvent_.noteId);
+        const EventVector& noteEvents = !releasedNotePitch_.empty()
+            ? releasedNotePitch_
+            : midiState.getVoiceNotePitchEvents(triggerEvent_.noteId);
         const ExpressionContext* noteContext = midiState.getExpressionContext(
             ExpressionTarget::note(triggerEvent_.noteId));
-        if (noteContext && noteContext->hasPitch()) {
+        if (!releasedNotePitch_.empty() || (noteContext && noteContext->hasPitch())) {
             auto scratch = resources_.getBufferPool().getBuffer(numFrames);
             if (scratch) {
                 if (region_->bendStep > 1.0f)

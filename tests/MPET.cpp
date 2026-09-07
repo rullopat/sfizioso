@@ -763,13 +763,11 @@ TEST_CASE("[MPE] Manager-only filter does not touch RPN data CCs on Member Chann
 // Channel Pressure and CC#74 on its Member Channel after the Note Off
 // message occurs — because the controller will recycle that Member Channel
 // for the next finger. Manager-Channel traffic still reaches the release
-// tail (§A.4.1). Voice::expressionChannel() returns the channel that
-// expression reads should consult: the trigger channel for active voices
-// (and for any voice triggered on the Manager Channel), and channel 0
-// (Lower Zone Manager) for released voices that were triggered on a
-// Member Channel. Every per-block read site (pitch envelope, the CC /
-// Channel Pressure / Poly Aftertouch mod sources, and region crossfades)
-// routes through this helper so the redirect applies uniformly.
+// tail (§A.4.1). Voice::expressionChannel() is a compatibility diagnostic:
+// active voices report their trigger channel; released Member voices report
+// the Manager. Rendering uses protocol-neutral contexts. Note pitch is frozen
+// on the voice at Note Off and added to live Manager pitch (MPEReleasePitchT
+// checks the audio); the other expression dimensions fall back to Manager.
 
 TEST_CASE("[MPE] expressionChannel: active voice on Member Channel uses its trigger channel")
 {

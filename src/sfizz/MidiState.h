@@ -23,6 +23,8 @@ namespace sfz {
 class MidiState {
 public:
     MidiState();
+    /** Bounded note history; voices reserve the same capacity for release. */
+    static constexpr size_t noteTimelineEvents = 65;
 
     /**
      * @brief Update the state after a note on event
@@ -439,7 +441,6 @@ private:
     static constexpr int masterChannel = 0;
     static constexpr size_t compatibilityControllerSlots = 8;
     static constexpr size_t compatibilityPolyPressureSlots = 4;
-    static constexpr size_t noteTimelineEvents = 65;
 
     ExpressionContext& compatibilityContext(int channel) noexcept;
     const ExpressionContext& compatibilityContext(int channel) const noexcept;
