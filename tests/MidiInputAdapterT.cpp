@@ -217,7 +217,7 @@ TEST_CASE("[Expression adapter] note controller density survives voice reconfigu
     REQUIRE(note->controllerValue(21) == 0.5f);
 }
 
-TEST_CASE("[Expression adapter] released MPE note detaches Note expression and retains Zone")
+TEST_CASE("[Expression adapter] retired note context detaches while the voice retains pressure")
 {
     sfz::Synth synth;
     synth.setMPEEnabled(true);
@@ -237,8 +237,10 @@ TEST_CASE("[Expression adapter] released MPE note detaches Note expression and r
                 .value
         == 0.75f);
 
+    const auto* voice = synth.getActiveVoices().front();
     synth.noteOff(0, 2, 60, 0);
     synth.hdChannelAftertouch(0, 2, 1.0f);
+    REQUIRE(voice->getPressureEvents().back().value == 0.75f);
     REQUIRE(state.getExpressionContext(
                 sfz::ExpressionTarget::note(trigger.noteId))
         == nullptr);
@@ -249,7 +251,7 @@ TEST_CASE("[Expression adapter] released MPE note detaches Note expression and r
         == 0.25f);
 }
 
-TEST_CASE("[Expression adapter] explicit zero Member timbre overrides Zone state")
+TEST_CASE("[Expression adapter] explicit zero Member timbre is stored separately from Zone")
 {
     sfz::Synth synth;
     synth.setMPEEnabled(true);
@@ -279,4 +281,7 @@ TEST_CASE("[Expression adapter] explicit zero Member timbre overrides Zone state
                 .back()
                 .value
         == 0.0f);
+    // Raw contexts keep explicit zero; rendering combines the live Manager
+    // and Member values rather than changing the stored MIDI state.
+    REQUIRE(voice->getControllerEvents(74).back().value == 0.75f);
 }

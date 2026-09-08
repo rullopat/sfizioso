@@ -91,10 +91,10 @@ MIDI CC, SFZ ExtendedCC and future MIDI 2.0 registered/assignable controllers ar
 A voice reads a composition of Global, Zone, Channel and Note contexts. Composition is semantic rather than inferred from empty vectors:
 
 - independent pitch contributions are additive;
-- note pressure/timbre overrides broader inherited values when present;
+- MPE pressure/timbre renders the maximum of Member and Manager values; raw contexts retain separate values and presence flags;
 - pedals retain zone/global scope;
 - ordinary controller inheritance has one explicit policy;
-- MPE Note/Member expression detaches at Note Off where required, while permitted Manager/Zone expression remains. Each voice snapshots the bounded note-pitch timeline before the logical-note slot is recycled, retaining the last Member bend throughout release and pedal sustain. This block's timeline collapses to its final value after rendering; no audio-thread allocation is needed.
+- MPE Note/Member expression detaches at Note Off where required, while permitted Manager/Zone expression remains. Each voice snapshots bounded note-pitch, pressure and CC74 timelines before the logical-note slot is recycled, retaining the final Member values throughout release and pedal sustain. Pitch adds live Manager bend; pressure and timbre use the maximum of live Manager and live/frozen Member values before SFZ mapping. This block's timeline collapses to its final value after rendering; no audio-thread allocation is needed.
 
 MPE bend ranges, MCM/RPN interpretation, Manager/Member filtering and release rules belong to the MPE adapter/profile resolver. Voice and modulation-source code consumes resolved contexts without branching on transport protocol.
 
@@ -153,7 +153,7 @@ M2 now replaces the expression-vector topology while preserving the M1 identity 
 - `ExpressionTarget` explicitly addresses Global, lower Zone, group/channel or generation-safe Note scopes. Controller IDs distinguish MIDI CC, SFZ ExtendedCC and future MIDI 2.0 registered/assignable namespaces.
 - `ExpressionContext` stores canonical pitch, pressure and timbre plus dense SFZ-controller and Poly Pressure slots. SFZ load densifies controller timelines from the completed modulation matrix; CC74 is retained as the MPE profile timbre control.
 - Every timeline is allocated/reserved on the control thread. Realtime insertion is sorted and bounded, never grows a container, and deterministically drops/counts an event when the timeline is full. A same-offset replacement remains accepted at capacity.
-- Global compatibility retains scalar values for every existing SFZ controller number. Zone/channel contexts retain only configured dense slots plus small preallocated compatibility slots before an SFZ is loaded. Inheritance uses explicit presence flags, so an intentional member value of zero overrides Global state.
+- Global compatibility retains scalar values for every existing SFZ controller number. Zone/channel contexts retain only configured dense slots plus small preallocated compatibility slots before an SFZ is loaded. Raw inheritance uses explicit presence flags, preserving intentional Member zero. Voice rendering combines MPE pressure and CC74 with the Manager using max, including for an explicit Member zero.
 - The note registry has a parallel preallocated context slot per logical-note slot. Layered voices resolve the same context; Note Off detaches it; generation checks prevent stale access after reuse. Note timelines allow 64 within-block changes plus their delay-zero sentinel, and retired-slot overflow counts remain monotonic.
 - Current `MidiState` C++ compatibility accessors continue to route through these contexts for source compatibility.
 
@@ -161,7 +161,7 @@ M3 now owns transport/profile policy at the input boundary:
 
 - `MidiInputAdapter` owns Lower-Zone MPE Manager/Member classification, Manager-only and Poly Pressure filters, RPN/MCM parsing, bend ranges and conversion to canonical semitones, plus compact pre-note pitch/pressure/timbre seeds.
 - Existing MIDI 1.0 entry points emit `ResolvedExpressionEvent` values with explicit Global, Zone, Channel or Note targets. MPE Member expression broadcasts to every active logical note on that Member Channel rather than selecting an arbitrary voice.
-- `TriggerEvent::expressionTarget` records the broad expression scope selected at Note On. Note state composes above it while active and generation-safe detachment on Note Off leaves release tails on their Zone/Global scope.
+- `TriggerEvent::expressionTarget` records the broad expression scope selected at Note On. Generation-safe detachment on Note Off releases the logical slot; voice-owned snapshots retain Member pitch, pressure and CC74 while the Zone remains live.
 - Voice pitch, crossfades, controller modulation, Channel Pressure and Poly Pressure consume explicit broad/note contexts. They no longer branch on MPE state or select expression through `triggerChannel_`; `Voice::expressionChannel()` remains only as a source-compatible diagnostic.
 - `AddressedNoteExpressionEvent` is the future UMP adapter seam. Group/channel/note addressing broadcasts deterministically to every active match unless a valid `NoteInstanceId` selects one generation.
 - All adapter and addressed-note dispatch paths are bounded, allocation-free and lock-free.

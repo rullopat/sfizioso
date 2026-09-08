@@ -765,9 +765,9 @@ TEST_CASE("[MPE] Manager-only filter does not touch RPN data CCs on Member Chann
 // for the next finger. Manager-Channel traffic still reaches the release
 // tail (§A.4.1). Voice::expressionChannel() is a compatibility diagnostic:
 // active voices report their trigger channel; released Member voices report
-// the Manager. Rendering uses protocol-neutral contexts. Note pitch is frozen
-// on the voice at Note Off and added to live Manager pitch (MPEReleasePitchT
-// checks the audio); the other expression dimensions fall back to Manager.
+// the Manager. Rendering uses protocol-neutral contexts. Note pitch, pressure and CC74 are frozen
+// on the voice at Note Off. Pitch adds live Manager pitch; pressure and CC74
+// take the maximum of Member and Manager (the MPERelease tests check audio).
 
 TEST_CASE("[MPE] expressionChannel: active voice on Member Channel uses its trigger channel")
 {

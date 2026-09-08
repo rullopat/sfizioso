@@ -235,9 +235,14 @@ struct Voice::Impl
 
     TriggerEvent triggerEvent_;
     // Owned by the voice: the logical-note slot can be reused immediately at
-    // Note Off. Keep this block's pitch events, then retain only the last value.
+    // Note Off. Keep this block's expression events, then retain the last values.
     EventVector releasedNotePitch_;
-    void freezeNotePitch(int delay) noexcept;
+    EventVector releasedNotePressure_;
+    EventVector releasedNoteTimbre_;
+    EventVector combinedPressure_;
+    EventVector combinedTimbre_;
+    void freezeNoteExpression(int delay) noexcept;
+    const EventVector& controllerEvents(int cc) noexcept;
     /**
      * @brief Compatibility MIDI expression channel retained for voice
      * stealing, Note Off matching and the public diagnostic accessor.
@@ -387,6 +392,10 @@ Voice::Impl::Impl(int voiceNumber, Resources& resources)
 : id_ { voiceNumber }, stateListener_(nullptr), resources_(resources)
 {
     releasedNotePitch_.reserve(MidiState::noteTimelineEvents);
+    releasedNotePressure_.reserve(MidiState::noteTimelineEvents);
+    releasedNoteTimbre_.reserve(MidiState::noteTimelineEvents);
+    combinedPressure_.reserve(samplesPerBlock_ + 1);
+    combinedTimbre_.reserve(samplesPerBlock_ + 1);
     for (unsigned i = 0; i < config::filtersPerVoice; ++i)
         filters_.emplace_back(resources);
 
@@ -434,8 +443,10 @@ bool Voice::startVoice(Layer* layer, int delay, const TriggerEvent& event) noexc
 
     impl.triggerEvent_ = event;
     impl.releasedNotePitch_.clear();
+    impl.releasedNotePressure_.clear();
+    impl.releasedNoteTimbre_.clear();
     if (event.type == TriggerEventType::NoteOff)
-        impl.freezeNotePitch(delay);
+        impl.freezeNoteExpression(delay);
     impl.triggerChannel_ = event.channel;
     if (impl.triggerEvent_.type == TriggerEventType::CC)
         impl.triggerEvent_.number = region.pitchKeycenter;
@@ -664,21 +675,28 @@ void Voice::Impl::off(int delay, bool fast) noexcept
     release(delay);
 }
 
-void Voice::Impl::freezeNotePitch(int delay) noexcept
+void Voice::Impl::freezeNoteExpression(int delay) noexcept
 {
-    if (!releasedNotePitch_.empty())
-        return;
     const ExpressionContext* context = resources_.getMidiState().getExpressionContext(
         ExpressionTarget::note(triggerEvent_.noteId));
-    if (!context || !context->hasPitch())
+    if (!context)
         return;
 
-    const EventVector& events = context->pitchEvents();
-    ASSERT(events.size() <= releasedNotePitch_.capacity());
-    for (const MidiEvent& event : events) {
-        if (event.delay > delay)
-            break;
-        releasedNotePitch_.push_back(event);
+    auto freeze = [delay](const EventVector& events, EventVector& snapshot) {
+        if (!snapshot.empty())
+            return;
+        ASSERT(events.size() <= snapshot.capacity());
+        for (const MidiEvent& event : events) {
+            if (event.delay > delay)
+                break;
+            snapshot.push_back(event);
+        }
+    };
+    if (context->hasPitch()) freeze(context->pitchEvents(), releasedNotePitch_);
+    if (context->hasPressure()) freeze(context->pressureEvents(), releasedNotePressure_);
+    if (context->hasController(74)) {
+        if (const auto* events = context->controllerEvents(74))
+            freeze(*events, releasedNoteTimbre_);
     }
 }
 
@@ -706,7 +724,7 @@ void Voice::registerNoteOff(int delay, int expressionChannel, int sourceChannel,
 
     if (noteMatches && impl.triggerEvent_.type == TriggerEventType::NoteOn) {
         // Freeze at physical Note Off, including one-shots and pedal-held notes.
-        impl.freezeNotePitch(delay);
+        impl.freezeNoteExpression(delay);
         impl.noteIsOff_ = true;
 
         if (impl.region_->loopMode == LoopMode::one_shot)
@@ -849,6 +867,8 @@ void Voice::setSamplesPerBlock(int samplesPerBlock) noexcept
 {
     Impl& impl = *impl_;
     impl.samplesPerBlock_ = samplesPerBlock;
+    impl.combinedPressure_.reserve(samplesPerBlock + 1);
+    impl.combinedTimbre_.reserve(samplesPerBlock + 1);
     impl.powerFollower_.setSamplesPerBlock(samplesPerBlock);
 }
 
@@ -895,9 +915,11 @@ void Voice::renderBlock(AudioSpan<float, 2> buffer) noexcept
 
     impl.powerFollower_.process(buffer);
 
-    if (!impl.releasedNotePitch_.empty()) {
-        impl.releasedNotePitch_.front() = { 0, impl.releasedNotePitch_.back().value };
-        impl.releasedNotePitch_.resize(1);
+    for (auto* snapshot : { &impl.releasedNotePitch_, &impl.releasedNotePressure_, &impl.releasedNoteTimbre_ }) {
+        if (!snapshot->empty()) {
+            snapshot->front() = { 0, snapshot->back().value };
+            snapshot->resize(1);
+        }
     }
 
     impl.age_ += buffer.getNumFrames();
@@ -915,22 +937,80 @@ void Voice::renderBlock(AudioSpan<float, 2> buffer) noexcept
 #endif
 }
 
+namespace {
+// Max is taken before the SFZ curve/depth mapping. Sampling both linear
+// timelines also preserves crossings between their event timestamps.
+const EventVector& maximumExpression(const EventVector& note, const EventVector& broad,
+    EventVector& output, int samplesPerBlock) noexcept
+{
+    if (broad.size() == 1 && broad.front().value == 0.0f)
+        return note;
+    if (note.size() == 1 && note.front().value == 0.0f)
+        return broad;
+    output.clear();
+    const int last = std::min(samplesPerBlock, std::max(note.back().delay, broad.back().delay));
+    ASSERT(output.capacity() >= static_cast<size_t>(last + 1));
+    size_t ni = 0, bi = 0;
+    auto valueAt = [](const EventVector& events, size_t& index, int delay) {
+        while (index + 1 < events.size() && events[index + 1].delay <= delay)
+            ++index;
+        const MidiEvent& a = events[index];
+        if (index + 1 == events.size()) return a.value;
+        const MidiEvent& b = events[index + 1];
+        return a.value + (b.value - a.value) * float(delay - a.delay) / float(b.delay - a.delay);
+    };
+    for (int i = 0; i <= last; ++i)
+        output.push_back({ i, std::max(valueAt(note, ni, i), valueAt(broad, bi, i)) });
+    return output;
+}
+}
+
+const EventVector& Voice::Impl::controllerEvents(int cc) noexcept
+{
+    const MidiState& state = resources_.getMidiState();
+    const auto target = triggerEvent_.expressionTarget;
+    const auto noteId = triggerEvent_.noteId;
+    const bool pressure = cc == ExtendedCCs::channelAftertouch;
+    if (target.scope != ExpressionScope::Zone || (!pressure && cc != 74))
+        return pressure ? state.getVoicePressureEvents(target, noteId)
+                        : state.getVoiceCCEvents(target, noteId, cc);
+
+    const EventVector* note = nullptr;
+    const auto& frozen = pressure ? releasedNotePressure_ : releasedNoteTimbre_;
+    if (!frozen.empty()) note = &frozen;
+    else if (const auto* context = state.getExpressionContext(ExpressionTarget::note(noteId))) {
+        if (pressure && context->hasPressure()) note = &context->pressureEvents();
+        else if (!pressure && context->hasController(74)) note = context->controllerEvents(74);
+    }
+    // No note identity deliberately resolves just the live Manager stream.
+    const EventVector& broad = pressure ? state.getVoicePressureEvents(target, {})
+                                       : state.getVoiceCCEvents(target, {}, cc);
+    if (!note) return broad;
+    return maximumExpression(*note, broad, pressure ? combinedPressure_ : combinedTimbre_, samplesPerBlock_);
+}
+
+const EventVector& Voice::getControllerEvents(int cc) const noexcept
+{
+    return impl_->controllerEvents(cc);
+}
+
+const EventVector& Voice::getPressureEvents() const noexcept
+{
+    return impl_->controllerEvents(ExtendedCCs::channelAftertouch);
+}
+
 void Voice::Impl::resetCrossfades() noexcept
 {
     float xfadeValue { 1.0f };
     const auto xfCurve = region_->crossfadeCCCurve;
 
-    MidiState& midiState = resources_.getMidiState();
-
     for (const auto& mod : region_->crossfadeCCInRange) {
-        const EventVector& events = midiState.getVoiceCCEvents(
-            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
+        const EventVector& events = controllerEvents(mod.cc);
         xfadeValue *= crossfadeIn(mod.data, events.back().value, xfCurve);
     }
 
     for (const auto& mod : region_->crossfadeCCOutRange) {
-        const EventVector& events = midiState.getVoiceCCEvents(
-            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
+        const EventVector& events = controllerEvents(mod.cc);
         xfadeValue *= crossfadeOut(mod.data, events.back().value, xfCurve);
     }
 
@@ -942,7 +1022,6 @@ void Voice::Impl::applyCrossfades(absl::Span<float> modulationSpan) noexcept
     const auto numSamples = modulationSpan.size();
     const auto xfCurve = region_->crossfadeCCCurve;
 
-    MidiState& midiState = resources_.getMidiState();
     BufferPool& bufferPool = resources_.getBufferPool();
 
     auto tempSpan = bufferPool.getBuffer(numSamples);
@@ -955,8 +1034,7 @@ void Voice::Impl::applyCrossfades(absl::Span<float> modulationSpan) noexcept
 
     bool canShortcut = true;
     for (const auto& mod : region_->crossfadeCCInRange) {
-        const auto& events = midiState.getVoiceCCEvents(
-            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
+        const auto& events = controllerEvents(mod.cc);
         canShortcut &= (events.size() == 1);
         linearEnvelope(events, *tempSpan, [&](float x) {
             return crossfadeIn(mod.data, x, xfCurve);
@@ -965,8 +1043,7 @@ void Voice::Impl::applyCrossfades(absl::Span<float> modulationSpan) noexcept
     }
 
     for (const auto& mod : region_->crossfadeCCOutRange) {
-        const auto& events = midiState.getVoiceCCEvents(
-            triggerEvent_.expressionTarget, triggerEvent_.noteId, mod.cc);
+        const auto& events = controllerEvents(mod.cc);
         canShortcut &= (events.size() == 1);
         linearEnvelope(events, *tempSpan, [&](float x) {
             return crossfadeOut(mod.data, x, xfCurve);

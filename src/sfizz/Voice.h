@@ -55,6 +55,10 @@ public:
      */
     NumericId<Voice> getId() const noexcept;
 
+    /** Resolved controller streams, including frozen MPE release expression. */
+    const EventVector& getControllerEvents(int cc) const noexcept;
+    const EventVector& getPressureEvents() const noexcept;
+
     enum class State {
         idle,
         playing,

@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-09-08
+
+### Fixed
+
+- Retain Member Channel Pressure and CC74 through Note Off and pedal sustain,
+  preventing unintended loudness and tone changes in release tails (issue #4
+  follow-up). Preserve within-block expression history across Member reuse.
+- Route SFZ pressure controller 129 through the same per-note pressure stream
+  as dedicated aftertouch modulation, including pressure-controlled gain.
+- Apply retained expression consistently to modulation sources and crossfades.
+
+### Changed
+
+- MPE pressure and CC74 now use `max(Member, Manager)` before SFZ mapping,
+  during both held notes and release. A neutral Manager cannot erase Member
+  expression; raising the Manager can raise all sounding notes. Lowering it
+  returns to each note's live or retained Member value. This replaces the
+  previous Member override while held / Manager-only fallback after Note Off.
+- Pitch remains additive. Ordinary MIDI expression remains global.
+
+### Added
+
+- Audio regressions for pressure gain/filter modulation, CC74 volume and
+  crossfades, both pedals, Manager changes, note/voice reuse and event timing.
+
 ## [1.2.1] - 2026-09-07
 
 ### Fixed

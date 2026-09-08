@@ -36,6 +36,7 @@ set(SFIZZ_TEST_SOURCES
     MidiInputAdapterT.cpp
     MPET.cpp
     MPEReleasePitchT.cpp
+    MPEReleaseExpressionT.cpp
     ChannelRoutingT.cpp
     ProgramRoutingT.cpp
     InterpolatorsT.cpp

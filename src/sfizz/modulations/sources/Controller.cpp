@@ -190,8 +190,8 @@ void ControllerSource::generate(const ModKey& sourceKey, NumericId<Voice> voiceI
             const TriggerEvent event = voice
                 ? voice->getTriggerEvent()
                 : TriggerEvent { TriggerEventType::CC, 0, 0.0f };
-            const EventVector& events = ms.getVoiceCCEvents(
-                event.expressionTarget, event.noteId, p.cc);
+            const EventVector& events = voice ? voice->getControllerEvents(p.cc)
+                : ms.getVoiceCCEvents(event.expressionTarget, event.noteId, p.cc);
             linearEnvelope(events, buffer, [](float x) { return x; }, p.step);
             canShortcut = events.size() == 1;
             break;
@@ -201,8 +201,8 @@ void ControllerSource::generate(const ModKey& sourceKey, NumericId<Voice> voiceI
             const TriggerEvent event = voice
                 ? voice->getTriggerEvent()
                 : TriggerEvent { TriggerEventType::CC, 0, 0.0f };
-            const EventVector& events = ms.getVoiceCCEvents(
-                event.expressionTarget, event.noteId, p.cc);
+            const EventVector& events = voice ? voice->getControllerEvents(p.cc)
+                : ms.getVoiceCCEvents(event.expressionTarget, event.noteId, p.cc);
             linearEnvelope(events, buffer, transformValue, p.step);
             canShortcut = events.size() == 1;
         }

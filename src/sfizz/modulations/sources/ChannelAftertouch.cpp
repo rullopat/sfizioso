@@ -29,8 +29,8 @@ void ChannelAftertouchSource::generate(const ModKey& sourceKey, NumericId<Voice>
     const TriggerEvent event = voice
         ? voice->getTriggerEvent()
         : TriggerEvent { TriggerEventType::CC, 0, 0.0f };
-    const EventVector& events = midiState_.getVoicePressureEvents(
-        event.expressionTarget, event.noteId);
+    const EventVector& events = voice ? voice->getPressureEvents()
+        : midiState_.getVoicePressureEvents(event.expressionTarget, event.noteId);
     linearEnvelope(events, buffer, [](float x) { return x; });
 }
 
